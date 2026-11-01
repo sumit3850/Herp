@@ -8,7 +8,8 @@ It combines a field guide, a guided identification helper, eBird-style checklist
 |---|---|---|
 | **Website + live data report** | `index.html` | Public |
 | **Field app** (installable PWA) | `app.html` | Signed-in users |
-| **Admin console** | `admin.html` | Admins |
+| **Admin dashboard** (React + TypeScript + Tailwind + shadcn/ui) | `dashboard/` → served at `/dashboard/` | Admins & reviewers |
+| Classic admin console (no build step) | `admin-classic.html` | Admins |
 
 ## Features
 
@@ -45,6 +46,47 @@ Each chart has a table view, and the page prints to an A4 PDF.
 
 **Privacy for threatened species.** Public maps round locations to about 1 km, or about 10 km for species flagged *sensitive* (traded or threatened). Exact points are visible only to the observer and to reviewers.
 
+## Admin dashboard (`dashboard/`)
+
+An EST-style operations dashboard built on the shadcn **App1** layout: a collapsible sidebar, KPI cards, area charts and activity feeds. It works in light and dark mode, uses a slide-in sidebar on phones, and animates between pages.
+
+- **Sign in / sign up.** Uses the `SignInPage` component, plus a matching `SignUpPage`, with the hero illustration (`assets/hero-herp.svg`) and feature highlights. *Continue with Google* uses Supabase OAuth; enable the Google provider in Supabase → Authentication.
+- **Overview.**
+  - KPIs: checklists, individuals, species, observers, items awaiting review, road-kills per 100 km.
+  - A 12-week submission chart.
+  - **Checklist coverage** for each active state: the share of the core checklist recorded so far.
+  - Recent activity.
+- **Submissions.** Every checklist and sighting submitted from the app.
+  - Filters: search, region, review status, date range.
+  - **⚑ Not on core checklist**: flags records of species that are not on that region's core checklist.
+  - Review: accept or reject each sighting or a whole checklist, or accept all pending checklists at once.
+  - Details panel: GPS track and sighting map, photos, notes.
+  - CSV export.
+- **Core checklists.** The admin edits the core checklist for any state, country or region:
+  - add and remove species, and set each one's status (*native, endemic, introduced, vagrant, uncertain*);
+  - paste a published species list (matched by scientific or common name);
+  - copy another region's checklist;
+  - export as CSV;
+  - one-click add for species recorded in the region but missing from its checklist.
+- **Species** (add, edit, delete, bulk import), **Users** (roles, approval, block, grant or revoke packs), **Packs & pricing**, **Road-kill** (surveys, map, CSV/GeoJSON), **Map** (exact locations), **Public report**.
+- **Reviewers** (`role = 'reviewer'`) see only Overview, Submissions, Road-kill, Map, Checklists (read-only) and Report. Field accounts get a "no access" screen.
+
+```bash
+cd dashboard
+```
+```bash
+npm install
+```
+```bash
+npm run dev
+```
+Open the URL Vite prints. The dashboard reads the shared `../config.js`, `../common.js` and `../data/seed.js`, so it uses the same data as the field app. With an empty `SUPABASE_URL` it runs in demo mode (`admin@demo / admin`, reviewer `anu@demo / anu`).
+
+`bash scripts/build-site.sh` builds everything into `_site/`. On every push to `main`, `.github/workflows/pages.yml` publishes it to GitHub Pages (set Settings → Pages → Source to **GitHub Actions** once).
+
+### shadcn/ui structure
+`dashboard/` is a standard shadcn project: `components.json`, the `@/*` path alias, Tailwind v4 with CSS variables in `src/index.css`, and components in **`src/components/ui`**. That folder matters because the shadcn CLI (`npx shadcn@latest add <component>`) and every shadcn component import from `@/components/ui/...`. Keeping that path means new components from the CLI or 21st.dev drop in without editing imports. `App1` (with its `app-1-utils/` sidebar, data and nav) and `SignInPage` live there unchanged; HerpWatch screens are in `src/pages/`.
+
 ## Architecture
 
 The architecture deliberately reuses the patterns of the two reference repositories:
@@ -59,7 +101,8 @@ config.js        deployment settings (the only file you edit). Empty SUPABASE_UR
 common.js        HW.api: one data API with two back-ends (Supabase | localStorage demo)
 data/seed.js     species catalogue, regions, packs, default prices (single source of truth)
 style.css        shared design tokens, with light and dark modes
-app.html         field app        admin.html  admin console        index.html  website + report
+app.html         field app        index.html  website + report     admin.html → dashboard/
+dashboard/       React + TS + Tailwind + shadcn admin dashboard (Vite)
 sw.js            offline cache (app shell + map tiles)
 supabase/schema.sql                       tables, RLS, views, RPCs, storage buckets
 supabase/seed.sql                         generated: node scripts/build-seed.mjs

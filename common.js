@@ -104,7 +104,7 @@
   // ════════════════════════════════════════════════════════════════════
   //  DEMO BACK-END (localStorage)
   // ════════════════════════════════════════════════════════════════════
-  const DKEY = 'hw_demo_db_v1';
+  const DKEY = 'hw_demo_db_v3';
   function demoDb() {
     let db = lsGet(DKEY, null);
     if (db) return db;
@@ -114,6 +114,8 @@
       users: [
         { id: 'u-admin', email: 'admin@demo', password: 'admin', username: 'admin', full_name: 'Demo Admin', role: 'admin', status: 'approved', home_region: 'IN-AN' },
         { id: 'u-field', email: 'field@demo', password: 'field', username: 'fielder', full_name: 'Demo Field User', role: 'user', status: 'approved', home_region: 'IN-KL' },
+        { id: 'u-anu', email: 'anu@demo', password: 'anu', username: 'anu.k', full_name: 'Anu K (sample)', role: 'reviewer', status: 'approved', home_region: 'IN-KL' },
+        { id: 'u-ravi', email: 'ravi@demo', password: 'ravi', username: 'ravi.s', full_name: 'Ravi S (sample)', role: 'user', status: 'pending', home_region: 'IN-AN' },
       ],
       entitlements: [{ id: uid(), user_id: 'u-field', pack: 'frogs', region: 'IN-KL', valid_until: new Date(Date.now() + 300 * 864e5).toISOString(), source: 'manual' }],
       trips: [], sightings: [], surveys: [], roadkill: [], session: null,
@@ -127,14 +129,31 @@
   function seedDemoRecords(db) {
     let x = 42; const rnd = () => ((x = (x * 16807) % 2147483647) / 2147483647);
     const today = new Date();
-    for (let i = 0; i < 240; i++) {
-      const s = db.species[Math.floor(rnd() * db.species.length)];
-      const regs = s.regions.filter((r) => CENTROIDS[r] && r !== 'IN');
-      if (!regs.length) continue;
+    const observers = ['u-field', 'u-admin', 'u-anu', 'u-ravi'];
+    const protos = ['traveling', 'stationary', 'night_walk', 'incidental', 'area'];
+    for (let k = 0; k < 60; k++) {
+      // one checklist (trip) in a random state, with 2–7 species from that state's checklist
+      const regs = Object.keys(CENTROIDS).filter((r) => r.startsWith('IN-') && (db.checklists[r] || []).length > 3);
       const r = regs[Math.floor(rnd() * regs.length)], c = CENTROIDS[r];
-      const d = new Date(today.getTime() - rnd() * 365 * 864e5).toISOString();
-      db.sightings.push({ id: uid(), user_id: rnd() > .5 ? 'u-field' : 'u-admin', trip_id: null, species_id: s.id, count: 1 + Math.floor(rnd() * 3),
-        lat: c[0] + (rnd() - .5) * 1.2, lng: c[1] + (rnd() - .5) * 1.2, observed_at: d, region_code: r, review_status: 'accepted', notes: '' });
+      const start = new Date(today.getTime() - rnd() * 365 * 864e5), dur = 20 + Math.floor(rnd() * 160);
+      const lat = c[0] + (rnd() - .5) * 1.2, lng = c[1] + (rnd() - .5) * 1.2, proto = protos[Math.floor(rnd() * protos.length)];
+      const track = proto === 'traveling' || proto === 'night_walk' ? Array.from({ length: 12 }, (_, t) => [lat + t * .002 + (rnd() - .5) * .001, lng + t * .0015]) : [];
+      const trip = { id: uid(), user_id: observers[Math.floor(rnd() * observers.length)], region_code: r, protocol: proto, started_at: start.toISOString(),
+        ended_at: new Date(start.getTime() + dur * 6e4).toISOString(), duration_min: dur, distance_km: Math.round(trackKm(track) * 100) / 100, observers: 1 + Math.floor(rnd() * 3),
+        complete: proto !== 'incidental' && rnd() > .3, track, lat, lng, notes: '' };
+      db.trips.push(trip);
+      const pool = db.checklists[r]; const n = 2 + Math.floor(rnd() * 6), used = new Set();
+      for (let j = 0; j < n; j++) {
+        // ~7% of records are species NOT on the state's core checklist (range extensions / misIDs to review)
+        const offPool = db.species.filter((x) => !pool.includes(x.id));
+        const sid = rnd() < 0.07 && offPool.length ? offPool[Math.floor(rnd() * offPool.length)].id : pool[Math.floor(rnd() * pool.length)];
+        if (used.has(sid)) continue; used.add(sid);
+        const age = (today - start) / 864e5;
+        db.sightings.push({ id: uid(), user_id: trip.user_id, trip_id: trip.id, species_id: sid, species_text: '', count: 1 + Math.floor(rnd() * 4),
+          lat: lat + (rnd() - .5) * .01, lng: lng + (rnd() - .5) * .01, observed_at: new Date(start.getTime() + j * 5 * 6e4).toISOString(), region_code: r,
+          life_stage: ['adult', 'juvenile', ''][j % 3], sex: '', notes: '', photos: [],
+          review_status: age < 60 ? 'pending' : rnd() > .08 ? 'accepted' : 'rejected' });
+      }
     }
     // three road-kill surveys with tracks along a road near Port Blair / Kerala / Odisha
     [['IN-AN', [11.62, 92.72], [11.85, 92.68]], ['IN-KL', [10.0, 76.3], [10.5, 76.9]], ['IN-OR', [20.3, 85.8], [20.9, 86.5]]].forEach(([reg, a, b], k) => {
@@ -179,6 +198,7 @@
     },
     async resetPassword() { throw new Error('Password reset needs the Supabase back-end (demo mode).'); },
     async signOut() { const db = demoDb(); db.session = null; saveDemo(db); },
+    async signInWithGoogle() { throw new Error('Google sign-in needs the Supabase back-end (you are in demo mode).'); },
     async updateProfile(p) { const db = demoDb(); const me = demoMe(db); Object.assign(me, p); saveDemo(db); return me; },
     async packs() { return demoDb().packs; },
     async regions() { return demoDb().regions; },
@@ -247,6 +267,29 @@
       async sightings() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u.username])); return db.sightings.map((s) => ({ ...s, username: un[s.user_id] })).sort((a, b) => String(b.observed_at).localeCompare(a.observed_at)); },
       async review(id, status) { const db = demoDb(); needAdmin(db); db.sightings.find((s) => s.id === id).review_status = status; saveDemo(db); },
       async deleteSighting(id) { const db = demoDb(); needAdmin(db); db.sightings = db.sightings.filter((s) => s.id !== id); saveDemo(db); },
+      async trips() {
+        const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u]));
+        return db.trips.map((t) => ({ ...t, username: un[t.user_id]?.username, full_name: un[t.user_id]?.full_name, sightings: db.sightings.filter((s) => s.trip_id === t.id) }))
+          .sort((a, b) => String(b.started_at).localeCompare(a.started_at));
+      },
+      async reviewTrip(tripId, status) { const db = demoDb(); needAdmin(db); db.sightings.filter((s) => s.trip_id === tripId).forEach((s) => (s.review_status = status)); saveDemo(db); },
+      async deleteTrip(id) { const db = demoDb(); needAdmin(db); db.trips = db.trips.filter((t) => t.id !== id); db.sightings = db.sightings.filter((s) => s.trip_id !== id); saveDemo(db); },
+      async checklistEntries(region) {
+        const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
+        return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
+      },
+      async setChecklistEntry(region, speciesId, status) {
+        const db = demoDb(); needAdmin(db); db.clStatus ||= {}; db.clStatus[region] ||= {};
+        const list = new Set(db.checklists[region] || []); const s = db.species.find((x) => x.id === speciesId);
+        if (status) { list.add(speciesId); db.clStatus[region][speciesId] = status; if (s && !s.regions.includes(region)) s.regions.push(region); }
+        else { list.delete(speciesId); delete db.clStatus[region][speciesId]; if (s) s.regions = s.regions.filter((r) => r !== region); }
+        db.checklists[region] = [...list]; saveDemo(db);
+      },
+      async copyChecklist(from, to) {
+        const entries = await this.checklistEntries(from);
+        for (const e of entries) await this.setChecklistEntry(to, e.species_id, e.status);
+        return entries.length;
+      },
       async roadkill() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u.username])); return { surveys: db.surveys.map((s) => ({ ...s, username: un[s.user_id] })), records: db.roadkill.map((s) => ({ ...s, username: un[s.user_id] })) }; },
       async deleteRoadkill(id) { const db = demoDb(); needAdmin(db); db.roadkill = db.roadkill.filter((s) => s.id !== id); saveDemo(db); },
       async deleteSurvey(id) { const db = demoDb(); needAdmin(db); db.surveys = db.surveys.filter((s) => s.id !== id); db.roadkill = db.roadkill.filter((s) => s.survey_id !== id); saveDemo(db); },
@@ -283,6 +326,14 @@
     id_notes: s.id_notes, behaviour: s.behaviour, similar_species: s.similar, images: s.images || [], traits: s.traits || {},
   });
   let _profile = null;
+  // field-record tables reference auth.users, so usernames are joined client-side from profiles
+  async function withUsernames(rows) {
+    const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+    if (!ids.length) return rows;
+    const profs = ok(await sb.from('profiles').select('id,username,full_name').in('id', ids));
+    const by = Object.fromEntries(profs.map((p) => [p.id, p]));
+    return rows.map((r) => ({ ...r, username: by[r.user_id]?.username || '', full_name: by[r.user_id]?.full_name || '' }));
+  }
   async function loadProfile() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return (_profile = null);
@@ -304,6 +355,7 @@
     },
     async resetPassword(email) { ok(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] })); },
     async signOut() { await sb.auth.signOut(); _profile = null; },
+    async signInWithGoogle(redirectTo) { ok(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo || location.href.split('#')[0] } })); },
     async updateProfile(p) { const me = await loadProfile(); ok(await sb.from('profiles').update(p).eq('id', me.id)); return loadProfile(); },
     async packs() { return ok(await sb.from('packs').select('*').order('sort')); },
     async regions() { return ok(await sb.from('regions').select('*').order('code')); },
@@ -365,13 +417,26 @@
       async setUser(id, patch) { ok(await sb.from('profiles').update(patch).eq('id', id)); },
       async grant(user_id, pack, region, days) { ok(await sb.rpc('grant_pack', { p_user: user_id, p_pack: pack, p_region: region, p_days: days || null })); },
       async revoke(entId) { ok(await sb.from('entitlements').update({ valid_until: new Date().toISOString() }).eq('id', entId)); },
-      async sightings() { return ok(await sb.from('sightings').select('*, profiles(username)').order('observed_at', { ascending: false }).limit(5000)).map((s) => ({ ...s, username: s.profiles?.username })); },
+      async sightings() { return withUsernames(ok(await sb.from('sightings').select('*').order('observed_at', { ascending: false }).limit(5000))); },
       async review(id, status) { ok(await sb.from('sightings').update({ review_status: status }).eq('id', id)); },
+      async reviewTrip(tripId, status) { ok(await sb.from('sightings').update({ review_status: status }).eq('trip_id', tripId)); },
       async deleteSighting(id) { ok(await sb.from('sightings').delete().eq('id', id)); },
+      async deleteTrip(id) { ok(await sb.from('trips').delete().eq('id', id)); },
+      async trips() { return withUsernames(ok(await sb.from('trips').select('*, sightings(*)').order('started_at', { ascending: false }).limit(2000))); },
       async roadkill() {
-        const surveys = ok(await sb.from('roadkill_surveys').select('*, profiles(username)').order('started_at', { ascending: false }));
-        const records = ok(await sb.from('roadkill_records').select('*, profiles(username)').order('observed_at', { ascending: false }));
-        return { surveys: surveys.map((s) => ({ ...s, username: s.profiles?.username })), records: records.map((s) => ({ ...s, username: s.profiles?.username })) };
+        const surveys = ok(await sb.from('roadkill_surveys').select('*').order('started_at', { ascending: false }));
+        const records = ok(await sb.from('roadkill_records').select('*').order('observed_at', { ascending: false }));
+        return { surveys: await withUsernames(surveys), records: await withUsernames(records) };
+      },
+      async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
+      async setChecklistEntry(region, speciesId, status) {
+        if (!status) ok(await sb.from('checklist').delete().eq('region_code', region).eq('species_id', speciesId));
+        else ok(await sb.from('checklist').upsert({ region_code: region, species_id: speciesId, status }));
+      },
+      async copyChecklist(from, to) {
+        const rows = ok(await sb.from('checklist').select('species_id,status').eq('region_code', from));
+        if (rows.length) ok(await sb.from('checklist').upsert(rows.map((r) => ({ ...r, region_code: to }))));
+        return rows.length;
       },
       async deleteRoadkill(id) { ok(await sb.from('roadkill_records').delete().eq('id', id)); },
       async deleteSurvey(id) { ok(await sb.from('roadkill_surveys').delete().eq('id', id)); },

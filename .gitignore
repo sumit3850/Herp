@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 supabase/.temp/
+_site/
+dashboard/dist/
+dashboard/node_modules/

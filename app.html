@@ -65,7 +65,58 @@ nav.tabs button.on{color:var(--forest-2)}
 .opt{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);font-weight:600}
 .opt .e{font-size:32px}.opt.on{border-color:var(--forest-2);background:var(--forest-soft)}
 .steps{display:flex;gap:4px;margin:6px 0 12px}.steps i{flex:1;height:4px;border-radius:2px;background:var(--line)}.steps i.on{background:var(--forest-2)}
-.auth{max-width:420px;margin:24px auto}
+/* ── motion (matches the dashboard's SignInPage) ── */
+@keyframes fadeSlideIn{to{opacity:1;filter:blur(0);transform:none}}
+@keyframes slideRightIn{to{opacity:1;filter:blur(0);transform:none}}
+.ae{animation:fadeSlideIn .6s ease-out forwards;opacity:0;filter:blur(4px);transform:translateY(10px)}
+.d1{animation-delay:.1s}.d2{animation-delay:.2s}.d3{animation-delay:.3s}.d4{animation-delay:.4s}.d5{animation-delay:.5s}.d6{animation-delay:.6s}.d7{animation-delay:.7s}.d8{animation-delay:.8s}.d9{animation-delay:.9s}
+.view.on:not(#v-auth){animation:fadeSlideIn .35s ease-out both;opacity:0;transform:translateY(6px)}
+.splist .sp{animation:fadeSlideIn .4s ease-out both;opacity:0;transform:translateY(8px);animation-delay:calc(min(var(--i,0),12) * 35ms);transition:transform .18s,box-shadow .18s}
+.splist .sp:hover{transform:translateY(-2px);box-shadow:0 10px 28px -14px rgba(20,40,28,.35)}
+@media (prefers-reduced-motion:reduce){.ae,.view.on,.splist .sp,.hero-img,.hcard{animation:none!important;opacity:1!important;filter:none!important;transform:none!important}}
+/* ── split sign-in ── */
+body.authing{padding-bottom:0}
+body.authing header.top,body.authing nav.tabs{display:none}
+body.authing main{max-width:none;padding:0}
+.auth-split{display:flex;min-height:100dvh}
+.auth-form{flex:1;display:flex;align-items:center;justify-content:center;padding:32px 20px}
+.auth-inner{width:100%;max-width:440px;display:flex;flex-direction:column;gap:10px}
+.auth-brand{display:flex;align-items:center;gap:10px;font-weight:650;color:var(--forest-2)}
+.auth-title{font-size:clamp(34px,6vw,48px);line-height:1.08;letter-spacing:-.02em;font-weight:600;margin-top:6px}
+.auth-title .thin{font-weight:300;display:block}.auth-title b{color:var(--forest-2)}
+.glass{border:1px solid var(--line);border-radius:16px;background:color-mix(in srgb,var(--ink) 4%,transparent);transition:border-color .15s,background .15s}
+.glass:focus-within{border-color:var(--forest-2);background:color-mix(in srgb,var(--forest-2) 8%,transparent)}
+.glass input,.glass select{border:0;background:transparent;border-radius:16px;padding:14px 16px;min-height:50px}
+.glass input:focus,.glass select:focus{outline:none}
+.glass.pw{position:relative}.glass.pw input{padding-right:48px}
+.eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:16px;opacity:.6;padding:6px}
+.linkbtn{color:var(--forest-2);font-size:13.5px;font-weight:600}
+.btn.big{min-height:52px;border-radius:16px;font-size:15px}
+.orline{position:relative;text-align:center;margin:10px 0 2px;font-size:13px;color:var(--ink-soft)}
+.orline::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px solid var(--line)}
+.orline span{position:relative;background:var(--paper);padding:0 12px}
+.auth-hero{display:none;flex:1;position:relative;padding:16px}
+.hero-img{position:absolute;inset:16px;border-radius:28px;background:url(assets/hero-herp.svg) center/cover;animation:slideRightIn .6s ease-out .3s forwards;opacity:0;filter:blur(4px);transform:translateX(-20px)}
+.hero-cards{position:absolute;bottom:34px;left:0;right:0;display:flex;gap:14px;justify-content:center;padding:0 32px}
+.hcard{display:flex;gap:12px;align-items:flex-start;width:260px;padding:16px;border-radius:24px;background:rgba(255,255,255,.18);backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,.22);color:#fff;font-size:13px;line-height:1.35;animation:fadeSlideIn .6s ease-out forwards;opacity:0;filter:blur(4px);transform:translateY(20px) scale(.96)}
+.hcard .he{font-size:22px;background:rgba(255,255,255,.85);border-radius:14px;width:40px;height:40px;display:grid;place-items:center;flex-shrink:0}
+.hcard small{display:block;opacity:.8}.hcard p{margin-top:4px;opacity:.95}
+.hcard.t1{animation-delay:1s}.hcard.t2{animation-delay:1.2s;display:none}.hcard.t3{animation-delay:1.4s;display:none}
+@media(min-width:900px){.auth-hero{display:block}}
+@media(min-width:1280px){.hcard.t2{display:flex}}
+@media(min-width:1600px){.hcard.t3{display:flex}}
+/* ── desktop: bottom tabs become a left rail ── */
+@media(min-width:1024px){
+  body:not(.authing){padding-bottom:0;padding-left:232px}
+  nav.tabs{top:0;right:auto;width:232px;border-top:0;border-right:1px solid var(--line);grid-template-columns:1fr;grid-auto-rows:min-content;align-content:start;padding:0 12px 20px;gap:4px}
+  nav.tabs::before{content:attr(data-brand);display:flex;align-items:center;height:62px;padding:0 10px;margin-bottom:10px;font-family:var(--display);font-size:22px;color:var(--forest-2);border-bottom:1px solid var(--line)}
+  nav.tabs button{flex-direction:row;justify-content:flex-start;gap:12px;font-size:14.5px;padding:10px 12px;border-radius:10px;transition:background .15s}
+  nav.tabs button .i{font-size:18px}
+  nav.tabs button:hover{background:var(--surface-2)}
+  nav.tabs button.on{background:var(--forest-soft)}
+  main{max-width:920px;padding:22px 28px}
+  .splist{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+}
 .tabs2{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--surface-2);padding:4px;border-radius:12px;margin-bottom:12px}
 .tabs2 button{padding:8px;border-radius:9px;font-weight:600}.tabs2 button.on{background:var(--surface);box-shadow:var(--shadow)}
 .price{font-family:var(--mono);font-weight:600}
@@ -86,25 +137,41 @@ nav.tabs button.on{color:var(--forest-2)}
 <main>
   <!-- AUTH -->
   <section class="view" id="v-auth">
-    <div class="auth card pad">
-      <h1 class="display" style="font-size:28px">Welcome</h1>
-      <p class="muted small" id="tagline" style="margin-bottom:14px"></p>
-      <div class="tabs2"><button id="t-in" class="on">Sign in</button><button id="t-up">Create account</button></div>
-      <form id="f-in">
-        <label class="f">Email or username</label><input id="in-email" autocomplete="username" required>
-        <label class="f">Password</label><input id="in-pw" type="password" autocomplete="current-password" required>
-        <button class="btn btn-primary btn-block" style="margin-top:14px">Sign in</button>
-        <button type="button" class="btn btn-ghost btn-block btn-sm" id="forgot" style="margin-top:8px">Forgot password?</button>
-      </form>
-      <form id="f-up" class="hidden">
-        <label class="f">Full name</label><input id="up-name" required>
-        <div class="grid2"><div><label class="f">Username</label><input id="up-user" required pattern="[a-z0-9_.\-]{3,30}" title="3–30 lowercase letters, digits, . _ -"></div>
-        <div><label class="f">Phone (optional)</label><input id="up-phone" type="tel"></div></div>
-        <label class="f">Email</label><input id="up-email" type="email" required>
-        <label class="f">Home state / country</label><select id="up-region"></select>
-        <label class="f">Password</label><input id="up-pw" type="password" minlength="6" required>
-        <button class="btn btn-primary btn-block" style="margin-top:14px">Create account</button>
-      </form>
+    <div class="auth-split">
+      <div class="auth-form">
+        <div class="auth-inner">
+          <div class="auth-brand ae d1"><img src="assets/icon.svg" alt="" width="40" height="40"><span id="auth-app">HerpWatch</span></div>
+          <h1 class="auth-title ae d1" id="auth-title"><span class="thin">Welcome to</span> <b id="auth-name">HerpWatch</b></h1>
+          <p class="muted ae d2" id="tagline"></p>
+          <div class="tabs2 ae d3" role="tablist"><button id="t-in" class="on" role="tab">Sign in</button><button id="t-up" role="tab">Create account</button></div>
+          <form id="f-in">
+            <div class="ae d3"><label class="f" for="in-email">Email or username</label><div class="glass"><input id="in-email" autocomplete="username" placeholder="Enter your email or username" required></div></div>
+            <div class="ae d4"><label class="f" for="in-pw">Password</label><div class="glass pw"><input id="in-pw" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="eye" data-eye="in-pw" aria-label="Show password">👁</button></div></div>
+            <div class="row ae d5" style="justify-content:flex-end;margin-top:8px"><button type="button" class="linkbtn" id="forgot">Reset password</button></div>
+            <button class="btn btn-primary btn-block big ae d6" style="margin-top:12px">Sign in</button>
+          </form>
+          <form id="f-up" class="hidden">
+            <div class="grid2 ae d1"><div><label class="f" for="up-name">Full name</label><div class="glass"><input id="up-name" autocomplete="name" placeholder="Your name" required></div></div>
+              <div><label class="f" for="up-user">Username</label><div class="glass"><input id="up-user" required pattern="[a-z0-9_.\-]{3,30}" title="3–30 lowercase letters, digits, . _ -" placeholder="e.g. herper.ravi"></div></div></div>
+            <div class="ae d2"><label class="f" for="up-email">Email</label><div class="glass"><input id="up-email" type="email" autocomplete="email" placeholder="Enter your email address" required></div></div>
+            <div class="grid2 ae d3"><div><label class="f" for="up-phone">Phone (optional)</label><div class="glass"><input id="up-phone" type="tel" autocomplete="tel" placeholder="+91…"></div></div>
+              <div><label class="f" for="up-region">Home state</label><div class="glass"><select id="up-region"></select></div></div></div>
+            <div class="ae d4"><label class="f" for="up-pw">Password</label><div class="glass pw"><input id="up-pw" type="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" required><button type="button" class="eye" data-eye="up-pw" aria-label="Show password">👁</button></div></div>
+            <button class="btn btn-primary btn-block big ae d5" style="margin-top:14px">Create account</button>
+          </form>
+          <div class="orline ae d7"><span>Or continue with</span></div>
+          <button type="button" class="btn btn-ghost btn-block big ae d8" id="g-in"><svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>Continue with Google</button>
+          <p class="tiny muted ae d9" style="text-align:center;margin-top:14px">Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
+        </div>
+      </div>
+      <div class="auth-hero" aria-hidden="true">
+        <div class="hero-img"></div>
+        <div class="hero-cards">
+          <div class="hcard t1"><span class="he">📖</span><div><b>Offline field guide</b><small>Safety info always free</small><p>Venomous &amp; poisonous flags, IUCN status, habitat and distribution for every species.</p></div></div>
+          <div class="hcard t2"><span class="he">📝</span><div><b>eBird-style checklists</b><small>Timed · GPS-tracked</small><p>Counts, life stage and photos, and it syncs when you’re back online.</p></div></div>
+          <div class="hcard t3"><span class="he">🛣️</span><div><b>Road-kill logger</b><small>Tracks + points</small><p>Survey effort is recorded, so results come out as kills per 100 km.</p></div></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -293,6 +360,7 @@ function show(v) {
   document.querySelectorAll('.view').forEach((x) => x.classList.toggle('on', x.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
   $('tabs').classList.toggle('hidden', v === 'auth');
+  document.body.classList.toggle('authing', v === 'auth');
   ({ guide: renderGuide, identify: renderIdentify, record: renderRecord, roadkill: renderRoadkill, me: renderMe })[v]?.();
   scrollTo(0, 0);
 }
@@ -317,7 +385,7 @@ function renderGuide() {
   $('filterchips').innerHTML = FILTERS.map(([id, l]) => `<button class="chip ${S.filters.has(id) ? 'on' : ''}" data-f="${id}">${esc(l)}</button>`).join('');
   const list = guideList();
   $('guidecount').textContent = `${list.length} species · checklist for ${regionName(S.region)}`;
-  $('splist').innerHTML = list.length ? list.map((s) => `<button class="card sp" data-id="${s.id}"><div class="th">${thumb(s)}</div><div class="grow"><div class="nm">${esc(s.common)}</div><div class="sci"><i>${esc(s.sci)}</i> · ${esc(s.family)}</div><div class="pills">${pills(s)}</div></div></button>`).join('')
+  $('splist').innerHTML = list.length ? list.map((s, i) => `<button class="card sp" style="--i:${i}" data-id="${s.id}"><div class="th">${thumb(s)}</div><div class="grow"><div class="nm">${esc(s.common)}</div><div class="sci"><i>${esc(s.sci)}</i> · ${esc(s.family)}</div><div class="pills">${pills(s)}</div></div></button>`).join('')
     : `<div class="empty">No species match. ${S.checklist.length ? 'Try clearing filters.' : 'No checklist has been published for this region yet.'}</div>`;
 }
 $('packchips').onclick = (e) => { const b = e.target.closest('[data-p]'); if (b) { S.pack = b.dataset.p; renderGuide(); } };
@@ -756,6 +824,8 @@ $('f-up').onsubmit = async (e) => {
     if (!S.me) return toast('Check your email to confirm the account, then sign in.', 5000);
     await afterLogin(); } catch (er) { toast(er.message, 4000); }
 };
+$('g-in').onclick = async () => { try { await api.signInWithGoogle(location.href.split('#')[0]); } catch (er) { toast(er.message, 4000); } };
+document.querySelectorAll('[data-eye]').forEach((b) => (b.onclick = () => { const i = $(b.dataset.eye); i.type = i.type === 'password' ? 'text' : 'password'; b.style.opacity = i.type === 'text' ? 1 : .6; }));
 $('forgot').onclick = async () => { const em = $('in-email').value.trim(); if (!em.includes('@')) return toast('Type your email first'); try { await api.resetPassword(em); toast('Reset link sent to ' + em); } catch (er) { toast(er.message); } };
 async function afterLogin() {
   if (S.me?.home_region && !localStorage.getItem('hw_region')) { S.region = S.me.home_region; U.lsSet('hw_region', S.region); }
@@ -768,6 +838,7 @@ function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.document
 (async function boot() {
   applyTheme();
   $('brand').textContent = HW.C.APP_NAME; document.title = HW.C.APP_NAME + ' Field App'; $('tagline').textContent = HW.C.TAGLINE;
+  $('auth-app').textContent = $('auth-name').textContent = HW.C.APP_NAME; $('tabs').dataset.brand = HW.C.APP_NAME;
   if (HW.DEMO) $('demo').classList.remove('hidden');
   await loadCatalog();
   fillRegionSelect($('region'), S.region); fillRegionSelect($('up-region'), S.region);

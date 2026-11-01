@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1200" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#0f3b2a"/><stop offset=".55" stop-color="#1f5b3c"/><stop offset="1" stop-color="#3c7d4f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".72" cy=".2" r=".55"><stop offset="0" stop-color="#e3b04b" stop-opacity=".55"/><stop offset="1" stop-color="#e3b04b" stop-opacity="0"/></radialGradient>
+    <pattern id="scales" width="28" height="24" patternUnits="userSpaceOnUse"><path d="M0 12 Q7 0 14 12 Q21 0 28 12 M-14 24 Q-7 12 0 24 Q7 12 14 24 Q21 12 28 24" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/></pattern>
+  </defs>
+  <rect width="900" height="1200" fill="url(#sky)"/>
+  <rect width="900" height="1200" fill="url(#glow)"/>
+  <rect width="900" height="1200" fill="url(#scales)"/>
+  <!-- canopy leaves -->
+  <g fill="#0b2a1e" opacity=".55">
+    <path d="M-40 0 C120 60 160 180 60 300 C40 180 -20 120 -40 0z"/><path d="M940 40 C780 90 760 220 860 330 C880 210 930 150 940 40z"/>
+    <path d="M150 -20 C260 40 300 120 250 210 C210 120 170 70 150 -20z"/><path d="M700 -30 C620 60 610 150 680 220 C700 140 730 70 700 -30z"/>
+  </g>
+  <!-- branch with a vine snake -->
+  <path d="M-20 520 C200 470 420 560 640 500 S880 470 940 480" fill="none" stroke="#2a1a10" stroke-width="22" stroke-linecap="round" opacity=".85"/>
+  <path d="M120 505 C190 430 250 560 330 500 S470 420 540 488 C580 525 640 470 690 455 l26 -8 -8 16 -20 -2" fill="none" stroke="#9be08a" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="704" cy="452" r="3.5" fill="#0b2a1e"/>
+  <!-- frog on a leaf -->
+  <path d="M520 860 C640 780 820 820 860 900 C760 950 600 950 520 860z" fill="#4f9a5a" opacity=".9"/>
+  <g transform="translate(640 820)">
+    <ellipse cx="40" cy="40" rx="62" ry="38" fill="#e3b04b"/>
+    <circle cx="10" cy="8" r="16" fill="#e3b04b"/><circle cx="70" cy="8" r="16" fill="#e3b04b"/>
+    <circle cx="10" cy="6" r="7" fill="#0b2a1e"/><circle cx="70" cy="6" r="7" fill="#0b2a1e"/>
+    <path d="M-20 70 q-20 10 -30 -2 M100 70 q20 10 30 -2" stroke="#c98a16" stroke-width="10" stroke-linecap="round" fill="none"/>
+  </g>
+  <!-- turtle -->
+  <g transform="translate(120 950)" opacity=".9">
+    <ellipse cx="110" cy="60" rx="110" ry="62" fill="#5a3b1f"/>
+    <path d="M40 40 h60 l20 30 h-60z M120 30 h50 l10 35 h-40z" fill="#7a5530"/>
+    <ellipse cx="236" cy="70" rx="30" ry="20" fill="#7d8f5a"/>
+    <circle cx="248" cy="64" r="4" fill="#0b2a1e"/>
+  </g>
+  <!-- gecko on bark -->
+  <g transform="translate(330 700) rotate(-25)" fill="#c2d98a" opacity=".85">
+    <ellipse cx="0" cy="0" rx="18" ry="46"/><ellipse cx="0" cy="-56" rx="15" ry="18"/>
+    <path d="M0 44 q-6 50 22 80" stroke="#c2d98a" stroke-width="10" fill="none" stroke-linecap="round"/>
+    <path d="M-16 -20 l-30 -16 M16 -20 l30 -16 M-16 22 l-30 18 M16 22 l30 18" stroke="#c2d98a" stroke-width="8" stroke-linecap="round"/>
+  </g>
+  <rect y="1080" width="900" height="120" fill="#0b2a1e" opacity=".35"/>
+</svg>

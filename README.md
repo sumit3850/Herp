@@ -136,29 +136,34 @@ python3 -m http.server 8080
 
 Open `http://localhost:8080/app.html` and sign in as **field@demo / field**, or as **admin@demo / admin** for `admin.html`. In demo mode, data lives in `localStorage`, "purchases" are free and instant, and sample records fill the report.
 
-## Go live
+## Go live (Supabase project `xjsigggtlxsscivwgzzl`)
 
-1. **Supabase.** Create a project.
-   - In the SQL editor, run `supabase/schema.sql`, then `supabase/seed.sql`.
-   - Under Authentication → Email, turn "Confirm email" on or off as you prefer.
-2. **Config.** Put the project URL and anon key in `config.js`.
-3. **Make yourself admin.** Sign up in the app, then run:
-   ```sql
-   update public.profiles set role = 'admin' where username = '<you>';
-   ```
-4. **Payments (Razorpay).** Deploy both functions and set their secrets:
-   ```bash
-   supabase functions deploy create-order
-   ```
-   ```bash
-   supabase functions deploy razorpay-webhook --no-verify-jwt
-   ```
-   ```bash
-   supabase secrets set RAZORPAY_KEY_ID=rzp_live_xxx RAZORPAY_KEY_SECRET=xxx RAZORPAY_WEBHOOK_SECRET=xxx
-   ```
-   Then in Razorpay, go to Settings → Webhooks and add `https://<ref>.functions.supabase.co/razorpay-webhook` for the events `payment.captured` and `refund.processed`.
-5. **Host.** Any static host works (GitHub Pages, Vercel, Netlify). Everything is plain files.
-6. **Android / iOS (optional).** Copy `native/` from EST-v2.0 and change `appId` and `appName` in `capacitor.config.ts`. Add `@capacitor-community/background-geolocation` so road-kill tracks keep recording while the screen is off. The web version holds a screen wake-lock instead.
+`config.js` already points the website, field app and dashboard at **https://xjsigggtlxsscivwgzzl.supabase.co** with the publishable key. That key is public by design; row-level security in `supabase/schema.sql` protects the data.
+
+**1. Create the back end.** Pick one option.
+- **Option A, GitHub Action** (recommended; re-runs automatically when `supabase/**` changes):
+  1. Supabase → **Connect** → copy the **Session pooler** URI and put your database password in it.
+  2. GitHub → Settings → Secrets and variables → Actions → New repository secret: `SUPABASE_DB_URL` = that URI.
+  3. Actions → **Supabase setup (database + backend)** → Run workflow.
+- **Option B, SQL Editor:** open `supabase/setup.sql` (schema + catalogue in one file), paste it into Supabase → SQL Editor, and Run.
+
+**2. Auth settings.** In Supabase → Authentication:
+- **URL Configuration → Site URL:** `https://sumit3850.github.io/Herp/app.html`.
+- **Redirect URLs:** add `https://sumit3850.github.io/Herp/**`.
+- **Providers → Email:** decide whether new users must confirm their e-mail (on by default).
+- **Providers → Google:** optional, for "Continue with Google".
+
+**3. Make yourself admin.**
+1. Sign up in the app.
+2. Run the workflow again with **admin_email** set to your address. (Or, in the SQL Editor: `update public.profiles set role='admin' where email='you@…';`)
+3. The dashboard opens at `/Herp/dashboard/`.
+
+**4. Payments (optional).**
+1. Add the secrets `SUPABASE_ACCESS_TOKEN` (supabase.com → Account → Access Tokens), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET`.
+2. Re-run the workflow. It deploys `create-order` and `razorpay-webhook` and sets the function secrets.
+3. In Razorpay → Settings → Webhooks, add `https://xjsigggtlxsscivwgzzl.functions.supabase.co/razorpay-webhook` for the events `payment.captured` and `refund.processed`.
+
+**5. Demo mode.** To go back to demo mode (browser-only data), set `SUPABASE_URL` to `''` in `config.js`.
 
 ## Before publishing: verify the data
 

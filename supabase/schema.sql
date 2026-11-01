@@ -51,6 +51,7 @@ create table if not exists public.pack_prices (
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
   username    text unique,
+  email       text default '',
   full_name   text default '',
   phone       text default '',
   home_region text references public.regions(code),
@@ -58,6 +59,8 @@ create table if not exists public.profiles (
   status      text not null default 'approved' check (status in ('approved','pending','blocked')),
   created_at  timestamptz default now()
 );
+
+alter table public.profiles add column if not exists email text default '';
 
 create or replace function public.is_admin() returns boolean
 language sql security definer stable set search_path = public as $$
@@ -79,8 +82,8 @@ declare md jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); reg text;
 begin
   reg := nullif(md->>'home_region','');
   if reg is not null and not exists (select 1 from public.regions where code = reg) then reg := null; end if;
-  insert into public.profiles (id, username, full_name, phone, home_region)
-  values (new.id,
+  insert into public.profiles (id, email, username, full_name, phone, home_region)
+  values (new.id, coalesce(new.email, ''),
           coalesce(nullif(lower(md->>'username'),''), split_part(new.email,'@',1) || '-' || substr(md5(new.id::text),1,4)),
           coalesce(md->>'full_name',''), coalesce(md->>'phone',''), reg)
   on conflict (id) do nothing;
@@ -424,12 +427,22 @@ grant execute on function public.public_tracks() to anon, authenticated;
 -- ─── storage: sighting photos (user folder = auth uid) & species images ────
 insert into storage.buckets (id, name, public) values ('photos','photos', true)  on conflict (id) do nothing;
 insert into storage.buckets (id, name, public) values ('species','species', true) on conflict (id) do nothing;
-drop policy if exists "photos: own upload" on storage.objects;
-create policy "photos: own upload" on storage.objects for insert to authenticated
-  with check (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
-drop policy if exists "photos: own delete" on storage.objects;
-create policy "photos: own delete" on storage.objects for delete to authenticated
-  using (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
-drop policy if exists "species: admin upload" on storage.objects;
-create policy "species: admin upload" on storage.objects for all to authenticated
-  using (bucket_id = 'species' and public.is_admin()) with check (bucket_id = 'species' and public.is_admin());
+-- Policies on storage.objects need the storage owner on some Supabase projects;
+-- if this step is refused, add the same rules under Storage → Policies.
+do $$
+begin
+  drop policy if exists "photos: own upload" on storage.objects;
+  create policy "photos: own upload" on storage.objects for insert to authenticated
+    with check (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
+  drop policy if exists "photos: own delete" on storage.objects;
+  create policy "photos: own delete" on storage.objects for delete to authenticated
+    using (bucket_id = 'photos' and (storage.foldername(name))[1] = auth.uid()::text);
+  drop policy if exists "species: admin upload" on storage.objects;
+  create policy "species: admin upload" on storage.objects for all to authenticated
+    using (bucket_id = 'species' and public.is_admin()) with check (bucket_id = 'species' and public.is_admin());
+exception when insufficient_privilege then
+  raise notice 'Storage policies skipped (%). Create them in Storage → Policies.', sqlerrm;
+end $$;
+
+-- backfill e-mails for accounts created before the column existed
+update public.profiles p set email = u.email from auth.users u where u.id = p.id and coalesce(p.email, '') = '';

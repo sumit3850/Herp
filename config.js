@@ -4,14 +4,14 @@
  * browser with the seed catalogue + generated sample records stored in
  * localStorage, and pack purchases are granted instantly (no money moves).
  *
- * The anon key is public by design — all protection lives in the RLS policies
+ * The publishable (anon) key is public by design — all protection lives in the RLS policies
  * of supabase/schema.sql. Never put the service-role key or Razorpay secret here.
  */
 window.HW_CONFIG = {
   APP_NAME: 'HerpWatch',
   TAGLINE: 'Reptiles & amphibians of India — field guide, sightings & road-kill logger',
-  SUPABASE_URL: '',          // e.g. https://abcd1234.supabase.co
-  SUPABASE_ANON_KEY: '',     // Project Settings → API → anon public
+  SUPABASE_URL: 'https://xjsigggtlxsscivwgzzl.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_QPGEQca5xkAMLeGJ1KZJ9A_z5fPaG6h', // publishable key: public by design
   RAZORPAY_KEY_ID: '',       // rzp_live_… (public key id only)
   SUPPORT_EMAIL: 'explorer3850@gmail.com',
   DEFAULT_REGION: 'IN-AN',

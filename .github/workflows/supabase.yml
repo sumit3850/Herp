@@ -1,0 +1,108 @@
+name: Supabase setup (database + backend)
+
+# Creates/updates the whole HerpWatch back end in the Supabase project:
+#   • database: tables, row-level security, views, RPCs, storage buckets (supabase/schema.sql)
+#   • catalogue: regions, packs, prices, species, core checklists       (supabase/seed.sql)
+#   • optional: promote an account to admin
+#   • optional: deploy the payment Edge Functions (create-order, razorpay-webhook)
+#
+# Repository secrets (Settings → Secrets and variables → Actions → New repository secret):
+#   SUPABASE_DB_URL        REQUIRED. Supabase → Connect → "Session pooler" URI with your DB password, e.g.
+#                          postgresql://postgres.xjsigggtlxsscivwgzzl:[PASSWORD]@aws-0-<region>.pooler.supabase.com:5432/postgres
+#                          (use the pooler: GitHub runners can't reach the IPv6-only direct host)
+#   SUPABASE_ACCESS_TOKEN  optional, for Edge Functions. supabase.com → Account → Access Tokens
+#   RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET   optional, for payments
+#
+# Run it: Actions → "Supabase setup" → Run workflow. Safe to run again; it also runs on
+# every push that changes supabase/**.
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: "Make this account an admin (sign up in the app first)"
+        required: false
+        default: ""
+      deploy_functions:
+        description: "Deploy payment Edge Functions (needs SUPABASE_ACCESS_TOKEN)"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths: ["supabase/**"]
+
+env:
+  PROJECT_REF: xjsigggtlxsscivwgzzl
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check secret
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error title=Missing secret::Add the SUPABASE_DB_URL repository secret (Supabase → Connect → Session pooler URI with your database password)."
+            exit 1
+          fi
+      - name: Install psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+      - name: Apply schema (tables, security, functions, storage)
+        run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/schema.sql
+      - name: Load catalogue (regions, packs, prices, species, checklists)
+        run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/seed.sql
+      - name: Promote admin
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.admin_email != '' }}
+        env:
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+        run: |
+          n=$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -t -A -v email="$ADMIN_EMAIL" <<'SQL'
+          with u as (
+            update public.profiles set role = 'admin', status = 'approved'
+            where id in (select id from auth.users where lower(email) = lower(:'email'))
+            returning 1)
+          select count(*) from u;
+          SQL
+          )
+          if [ "$n" = "0" ]; then echo "::error title=No such account::No account with that e-mail yet. Sign up in the app first, then run this again."; exit 1; fi
+          echo "::notice title=Admin::$ADMIN_EMAIL is now an admin"
+      - name: Summary
+        run: |
+          psql "$SUPABASE_DB_URL" -t -A -F ' | ' -c "select 'species', count(*) from public.species union all select 'checklist entries', count(*) from public.checklist union all select 'regions', count(*) from public.regions union all select 'pack prices', count(*) from public.pack_prices union all select 'users', count(*) from public.profiles union all select 'admins', count(*) from public.profiles where role = 'admin'" \
+            | sed 's/^/- /' | tee -a "$GITHUB_STEP_SUMMARY"
+
+  functions:
+    needs: database
+    if: ${{ github.event_name == 'push' || inputs.deploy_functions }}
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+      RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip without access token
+        id: gate
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::notice title=Edge Functions skipped::Add SUPABASE_ACCESS_TOKEN to deploy the payment functions."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else echo "go=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: supabase/setup-cli@v1
+        if: steps.gate.outputs.go == 'true'
+        with: { version: latest }
+      - name: Deploy functions
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          supabase functions deploy create-order --project-ref "$PROJECT_REF"
+          supabase functions deploy razorpay-webhook --no-verify-jwt --project-ref "$PROJECT_REF"
+      - name: Set payment secrets
+        if: steps.gate.outputs.go == 'true' && env.RAZORPAY_KEY_SECRET != ''
+        run: |
+          supabase secrets set --project-ref "$PROJECT_REF" \
+            RAZORPAY_KEY_ID="$RAZORPAY_KEY_ID" RAZORPAY_KEY_SECRET="$RAZORPAY_KEY_SECRET" RAZORPAY_WEBHOOK_SECRET="$RAZORPAY_WEBHOOK_SECRET" \
+            ALLOWED_ORIGIN="https://sumit3850.github.io"
+          echo "::notice title=Razorpay webhook URL::https://$PROJECT_REF.functions.supabase.co/razorpay-webhook"

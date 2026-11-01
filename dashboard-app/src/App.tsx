@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Crown, Hourglass, Moon, RefreshCw, Send, ShieldAlert, Sun } from "lucide-react";
+import { Crown, DatabaseZap, Hourglass, Moon, RefreshCw, Send, ShieldAlert, Sun } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -123,13 +123,13 @@ function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSig
 
 function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal; onSignOut: () => void; onGranted: (p: Profile) => void }) {
   const toast = useToast();
-  const [hasAdmin, setHasAdmin] = React.useState<boolean | null>(null);
+  const [hasAdmin, setHasAdmin] = React.useState<boolean | null | undefined>(undefined);
   const [req, setReq] = React.useState<AccessRequest | null>(null);
   const [role, setRole] = React.useState<"reviewer" | "admin">("reviewer");
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const load = React.useCallback(async () => {
-    const [h, r] = await Promise.all([hw.api.hasAdmin().catch(() => true), hw.api.myAccessRequest().catch(() => null)]);
+    const [h, r] = await Promise.all([hw.api.hasAdmin().catch(() => true as boolean | null), hw.api.myAccessRequest().catch(() => null)]);
     setHasAdmin(h); setReq(r);
   }, [hw]);
   React.useEffect(() => { load(); }, [load]);
@@ -143,6 +143,15 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
           <p className="text-muted-foreground">Signed in as <b className="text-foreground">{me.email || "@" + me.username}</b>. This account works in the field app; the dashboard needs the <b>reviewer</b> or <b>admin</b> role.</p>
         </div>
 
+        {hasAdmin === null && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
+            <h2 className="flex items-center gap-2 font-semibold"><DatabaseZap className="size-4" /> Database update needed</h2>
+            <p className="mt-1 text-sm text-muted-foreground">The access options need the newest database version. In Supabase open <b>SQL Editor</b>, paste the whole of <code className="rounded bg-muted px-1">supabase/setup.sql</code> from the GitHub repo and click <b>Run</b> (safe to re-run; it keeps all data). Then tap “Check again”.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Already made yourself admin with SQL? Just tap “Check again”.</p>
+            <Button className="mt-3" onClick={recheck}><RefreshCw /> Check again</Button>
+          </div>
+        )}
+
         {hasAdmin === false && (
           <div className="rounded-xl border border-primary/40 bg-primary/5 p-5">
             <h2 className="flex items-center gap-2 font-semibold"><Crown className="size-4 text-primary" /> This project has no admin yet</h2>
@@ -155,7 +164,7 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
           </div>
         )}
 
-        {hasAdmin !== false && req?.status === "pending" && (
+        {hasAdmin === true && req?.status === "pending" && (
           <div className="rounded-xl border bg-muted/40 p-5">
             <h2 className="flex items-center gap-2 font-semibold"><Hourglass className="size-4" /> Request sent</h2>
             <p className="mt-1 text-sm text-muted-foreground">You asked for <b>{req.requested_role}</b> access on {new Date(req.created_at).toLocaleDateString()}. An admin will approve it from the Users page; then tap “Check again”.</p>
@@ -163,9 +172,9 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
           </div>
         )}
 
-        {hasAdmin !== false && req?.status !== "pending" && (
+        {hasAdmin === true && req?.status !== "pending" && (
           <div className="rounded-xl border p-5">
-            <h2 className="font-semibold">Request access</h2>
+            <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">Request access</h2><Button size="sm" variant="ghost" onClick={recheck}><RefreshCw /> Check again</Button></div>
             {req?.status === "declined" && <p className="mt-1 text-sm text-destructive">Your last request was declined. You can ask again with more detail.</p>}
             <div className="mt-3 grid grid-cols-2 gap-2">
               {([["reviewer", "Reviewer", "Review and accept submissions"], ["admin", "Admin", "Manage checklists, species, users"]] as const).map(([k, t, d]) => (

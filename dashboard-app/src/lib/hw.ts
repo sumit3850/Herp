@@ -53,7 +53,8 @@ export interface HWApi {
   resetPassword(email: string): Promise<void>;
   resendConfirmation(email: string): Promise<void>;
   isRecovery(): boolean;
-  hasAdmin(): Promise<boolean>;
+  /** null = the database is older than the app (setup.sql not re-run) */
+  hasAdmin(): Promise<boolean | null>;
   claimFirstAdmin(): Promise<Profile>;
   requestAccess(role: "reviewer" | "admin", note?: string): Promise<AccessRequest>;
   myAccessRequest(): Promise<AccessRequest | null>;

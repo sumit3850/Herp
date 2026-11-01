@@ -407,7 +407,13 @@
   // ════════════════════════════════════════════════════════════════════
   //  SUPABASE BACK-END
   // ════════════════════════════════════════════════════════════════════
-  const ok = ({ data, error }) => { if (error) throw new Error(error.message); return data; };
+  // PGRST202 = function missing, PGRST205/42P01 = table missing: the database is older than the app
+  const DB_UPDATE_MSG = 'The database needs the latest update: an admin should paste supabase/setup.sql into Supabase → SQL Editor and Run it (safe to re-run, keeps all data).';
+  const isDbBehind = (error) => ['PGRST202', 'PGRST205', '42P01', '42883'].includes(error?.code) || /schema cache|does not exist/i.test(error?.message || '');
+  const ok = ({ data, error }) => {
+    if (error) throw isDbBehind(error) ? Object.assign(new Error(DB_UPDATE_MSG), { code: 'db_update_needed' }) : new Error(error.message);
+    return data;
+  };
   // DB rows use snake_case column names; the UI uses the seed's short names.
   const fromRow = (r) => r && ({
     id: r.id, pack: r.pack_id, common: r.common_name, sci: r.scientific_name, family: r.family, venom: r.venom, toxic: r.toxic,
@@ -474,10 +480,10 @@
       return loadProfile();   // null when e-mail confirmation is required
     },
     // ── dashboard access ──
-    async hasAdmin() { const { data, error } = await sb.rpc('has_admin'); if (error) return true; return !!data; },
+    async hasAdmin() { const { data, error } = await sb.rpc('has_admin'); if (error) return isDbBehind(error) ? null : true; return !!data; },   // null = database not updated yet
     async claimFirstAdmin() { ok(await sb.rpc('claim_first_admin')); return loadProfile(); },
     async requestAccess(role, note = '') { return ok(await sb.rpc('request_access', { p_role: role, p_note: note })); },
-    async myAccessRequest() { const me = _profile || (await loadProfile()); return ok(await sb.from('access_requests').select('*').eq('user_id', me.id).order('created_at', { ascending: false }).limit(1).maybeSingle()); },
+    async myAccessRequest() { const me = _profile || (await loadProfile()); const { data, error } = await sb.from('access_requests').select('*').eq('user_id', me.id).order('created_at', { ascending: false }).limit(1).maybeSingle(); if (error) return null; return data; },
     async submitFeedback(f) {
       const { data: { session } } = await sb.auth.getSession();
       ok(await sb.from('feedback').insert({ ...f, user_id: session?.user?.id || null }));

@@ -40,6 +40,13 @@ jobs:
             row "Accounts + live updates (accounts-live.sql)" "not installed" "installed"; fail=1
             echo "::error title=Run accounts-live.sql::Paste supabase/accounts-live.sql into Supabase → SQL Editor and Run."
           fi
+          # ── which setup.sql version is installed? (each probe only reads) ──
+          probe() { curl -s -o /tmp/p.json -w '%{http_code}' "${H[@]}" "$@"; }
+          c=$(probe "$URL/rest/v1/feedback?select=id&limit=0"); row "v3 · feedback table" "HTTP $c" "200"
+          c=$(probe "$URL/rest/v1/audit_log?select=id&limit=0"); row "v2 · audit log table" "HTTP $c" "200"
+          c=$(probe -X POST -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/has_admin"); row "v3 · has_admin() (dashboard access options)" "HTTP $c $(head -c 80 /tmp/p.json)" "200 true/false"
+          c=$(probe -X POST -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/ensure_profile"); row "accounts-live · ensure_profile()" "HTTP $c" "200 (null when signed out)"
+          c=$(probe "$URL/rest/v1/access_requests?select=id&limit=0"); row "v3 · access_requests table" "HTTP $c" "200"
           # ── sign-in / sign-up diagnostics (no account is created, no e-mail is sent) ──
           st=$(curl -s "${H[@]}" "$URL/auth/v1/settings"); echo "AUTH SETTINGS: $st"
           j2() { echo "$st" | python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }

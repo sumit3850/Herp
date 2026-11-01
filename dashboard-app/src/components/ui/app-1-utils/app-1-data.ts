@@ -4,6 +4,7 @@ import {
   ClipboardCheck,
   Inbox,
   LayoutDashboard,
+  History,
   Map,
   Route,
   Users,
@@ -14,7 +15,7 @@ import {
 import type { ChartConfig } from "@/components/ui/chart";
 
 /* Navigation shared by the App1 demo and the live HerpWatch dashboard. */
-export type NavId = "overview" | "submissions" | "checklists" | "species" | "roadkill" | "users" | "packs" | "map" | "reports";
+export type NavId = "overview" | "submissions" | "checklists" | "species" | "roadkill" | "users" | "packs" | "map" | "reports" | "audit";
 export const app1Nav: { group: string; items: { id: NavId; label: string; icon: LucideIcon }[] }[] = [
   { group: "Monitor", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -27,6 +28,7 @@ export const app1Nav: { group: string; items: { id: NavId; label: string; icon: 
     { id: "species", label: "Species", icon: BookOpen },
     { id: "users", label: "Users", icon: Users },
     { id: "packs", label: "Packs & pricing", icon: Wallet },
+    { id: "audit", label: "Audit log", icon: History },
   ] },
   { group: "Share", items: [{ id: "reports", label: "Public report", icon: BarChart3 }] },
 ];

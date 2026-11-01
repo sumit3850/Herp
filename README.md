@@ -147,6 +147,8 @@ Open `http://localhost:8080/app.html` and sign in as **field@demo / field**, or 
   3. Actions → **Supabase setup (database + backend)** → Run workflow.
 - **Option B, SQL Editor:** open `supabase/setup.sql` (schema + catalogue in one file), paste it into Supabase → SQL Editor, and Run.
 
+**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs about 50 checks covering accounts, visitors, field users, blocked users, admins, reviewers, purchases, map privacy and live updates, with simulated users. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
+
 **2. Auth settings.** In Supabase → Authentication:
 - **URL Configuration → Site URL:** `https://sumit3850.github.io/Herp/app.html`.
 - **Redirect URLs:** add `https://sumit3850.github.io/Herp/**`.

@@ -14,15 +14,21 @@ for (const r of [...REGIONS].sort((a, b) => (a.parent ? 1 : 0) - (b.parent ? 1 :
   out.push(`insert into public.regions (code,name,parent) values (${q(r.code)},${q(r.name)},${q(r.parent)}) on conflict (code) do update set name=excluded.name, parent=excluded.parent;`);
 PACKS.forEach((p, i) =>
   out.push(`insert into public.packs (id,name,emoji,color,blurb,sort) values (${q(p.id)},${q(p.name)},${q(p.emoji)},${q(p.color)},${q(p.blurb)},${i}) on conflict (id) do update set name=excluded.name, emoji=excluded.emoji, color=excluded.color, blurb=excluded.blurb, sort=excluded.sort;`));
+// Prices and checklists are seeded ONCE: re-running setup never brings back
+// an entry an admin deleted (only an empty price table / empty regions are filled).
+out.push('create temp table _seed_prices (pack_id text, region_code text, paise int, days int) on commit drop;');
 for (const p of PRICES)
-  out.push(`insert into public.pack_prices (pack_id,region_code,paise,days) values (${q(p.pack)},${q(p.region)},${p.paise},${p.days}) on conflict (pack_id,region_code) do nothing;`);
+  out.push(`insert into _seed_prices values (${q(p.pack)},${q(p.region)},${p.paise},${p.days});`);
+out.push('insert into public.pack_prices (pack_id,region_code,paise,days) select * from _seed_prices where not exists (select 1 from public.pack_prices) on conflict do nothing;');
+out.push('create temp table _seed_checklist (region_code text, species_id text, status text) on commit drop;');
 for (const s of SPECIES) {
   out.push(`insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values (` +
     [s.id, s.pack, s.common, s.sci, s.family, s.venom, s.toxic, s.iucn, s.endemic, s.sensitive, s.size, s.habitat, s.distribution, s.id_notes, s.behaviour, s.similar].map(q).join(',') +
     `,${j(s.images)},${j(s.traits)}) on conflict (id) do nothing;`);
   for (const r of s.regions)
-    out.push(`insert into public.checklist (region_code,species_id,status) values (${q(r)},${q(s.id)},${q(s.endemic && r !== 'IN' ? 'endemic' : 'native')}) on conflict do nothing;`);
+    out.push(`insert into _seed_checklist values (${q(r)},${q(s.id)},${q(s.endemic && r !== 'IN' ? 'endemic' : 'native')});`);
 }
+out.push('insert into public.checklist (region_code,species_id,status) select s.* from _seed_checklist s where not exists (select 1 from public.checklist c where c.region_code = s.region_code) on conflict do nothing;');
 out.push('commit;');
 writeFileSync(new URL('../supabase/seed.sql', import.meta.url), out.join('\n') + '\n');
 // one file to paste into the Supabase SQL Editor: schema + catalogue

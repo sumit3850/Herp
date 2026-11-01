@@ -168,7 +168,7 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
                       <TableCell className="whitespace-nowrap">{regionName(s.region_code)}</TableCell>
                       <TableCell>@{s.username}</TableCell>
                       <TableCell className="whitespace-nowrap font-mono text-xs">{s.lat != null ? <a className="text-primary hover:underline" target="_blank" rel="noreferrer" href={`https://www.google.com/maps?q=${s.lat},${s.lng}`}>{(+s.lat).toFixed(4)}, {(+s.lng!).toFixed(4)}</a> : "—"}</TableCell>
-                      <TableCell><ReviewBadge status={s.review_status} /></TableCell>
+                      <TableCell title={s.reviewed_at ? `Reviewed ${fmtDateTime(s.reviewed_at)}` : undefined}><ReviewBadge status={s.review_status} />{s.reviewed_at && <span className="mt-0.5 block text-[11px] text-muted-foreground">{fmtDate(s.reviewed_at)}</span>}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="icon" variant={s.review_status === "accepted" ? "default" : "ghost"} className="size-8" title="Accept" onClick={() => reviewOne(s, "accepted")}><Check /></Button>

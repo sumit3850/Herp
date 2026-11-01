@@ -25,7 +25,7 @@ export interface Profile { id: string; email?: string; username: string; full_na
 export interface Entitlement { id: string; user_id?: string; pack: PackId; region: string; valid_until: string | null; source: string }
 export interface Sighting {
   id: string; trip_id: string | null; user_id: string; username?: string; species_id: string | null; species_text?: string; count: number;
-  lat: number | null; lng: number | null; observed_at: string; region_code: string; life_stage?: string; sex?: string; notes?: string; photos?: string[]; review_status: ReviewStatus;
+  lat: number | null; lng: number | null; observed_at: string; region_code: string; life_stage?: string; sex?: string; notes?: string; photos?: string[]; review_status: ReviewStatus; reviewed_by?: string | null; reviewed_at?: string | null;
 }
 export interface Trip {
   id: string; user_id: string; username?: string; full_name?: string; region_code: string; protocol: string; started_at: string; ended_at?: string;
@@ -39,6 +39,7 @@ export interface Stats {
   by_month: { month: string; sightings: number; roadkill: number }[]; top_species: { species_id: string; common: string; sci: string; n: number }[];
   roadkill_species: { species_id: string; common: string; sci: string; n: number }[];
 }
+export interface AuditEntry { id: number; at: string; actor: string | null; actor_name: string; tbl: string; action: string; row_key: string; old_row: Record<string, unknown> | null; new_row: Record<string, unknown> | null }
 export interface ChecklistEntry { species_id: string; status: ChecklistStatus }
 
 export interface HWApi {
@@ -81,6 +82,7 @@ export interface HWApi {
     roadkill(): Promise<{ surveys: Survey[]; records: RoadkillRecord[] }>;
     deleteRoadkill(id: string): Promise<void>;
     deleteSurvey(id: string): Promise<void>;
+    auditLog(limit?: number): Promise<AuditEntry[]>;
   };
 }
 

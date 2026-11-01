@@ -408,6 +408,152 @@ grant execute on function public.public_stats()  to anon, authenticated;
 grant execute on function public.public_points() to anon, authenticated;
 grant execute on function public.public_tracks() to anon, authenticated;
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- v2 · production hardening (idempotent: upgrades an existing database in place)
+--   • updated_at everywhere · review metadata (who/when/why)
+--   • data validation (coordinates, counts, dates, distances)
+--   • records can only be attached to the owner's own checklist / survey
+--   • audit log of every admin change to checklists, species, prices, roles, packs
+--   • indexes for the dashboard's filters
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- updated_at ----------------------------------------------------------------
+create or replace function public.touch_updated_at() returns trigger
+language plpgsql as $$ begin new.updated_at := now(); return new; end $$;
+do $$
+declare t text;
+begin
+  foreach t in array array['profiles','species','checklist','pack_prices','trips','sightings','roadkill_surveys','roadkill_records','entitlements'] loop
+    execute format('alter table public.%I add column if not exists updated_at timestamptz not null default now()', t);
+    execute format('drop trigger if exists touch_updated_at on public.%I', t);
+    execute format('create trigger touch_updated_at before update on public.%I for each row execute function public.touch_updated_at()', t);
+  end loop;
+end $$;
+
+-- review metadata -------------------------------------------------------------
+alter table public.sightings add column if not exists reviewed_by uuid references auth.users(id) on delete set null;
+alter table public.sightings add column if not exists reviewed_at timestamptz;
+alter table public.sightings add column if not exists review_note text not null default '';
+
+create or replace function public.guard_review() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_reviewer() then
+    -- observers can never accept their own records; editing a record sends it back to review
+    new.review_status := 'pending';
+    if tg_op = 'UPDATE' then new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at; new.review_note := old.review_note; end if;
+  elsif tg_op = 'INSERT' or new.review_status is distinct from old.review_status then
+    new.reviewed_by := case when new.review_status = 'pending' then null else auth.uid() end;
+    new.reviewed_at := case when new.review_status = 'pending' then null else now() end;
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_review on public.sightings;
+create trigger guard_review before insert or update on public.sightings for each row execute function public.guard_review();
+
+-- validation (NOT VALID: enforced for new/edited rows, existing rows untouched) --
+do $$
+declare c record;
+begin
+  for c in select * from (values
+    ('sightings', 'sightings_lat_ok', 'lat is null or lat between -90 and 90'),
+    ('sightings', 'sightings_lng_ok', 'lng is null or lng between -180 and 180'),
+    ('sightings', 'sightings_when_ok', $c$observed_at <= now() + interval '2 days'$c$),
+    ('sightings', 'sightings_has_taxon', 'species_id is not null or length(trim(species_text)) > 0'),
+    ('trips', 'trips_lat_ok', 'lat is null or lat between -90 and 90'),
+    ('trips', 'trips_lng_ok', 'lng is null or lng between -180 and 180'),
+    ('trips', 'trips_effort_ok', 'coalesce(duration_min, 0) >= 0 and coalesce(distance_km, 0) >= 0 and coalesce(observers, 1) >= 1'),
+    ('trips', 'trips_times_ok', 'ended_at is null or ended_at >= started_at'),
+    ('roadkill_surveys', 'rk_surveys_ok', 'coalesce(distance_km, 0) >= 0 and (ended_at is null or ended_at >= started_at)'),
+    ('roadkill_records', 'rk_records_lat_ok', 'lat is null or lat between -90 and 90'),
+    ('roadkill_records', 'rk_records_lng_ok', 'lng is null or lng between -180 and 180'),
+    ('roadkill_records', 'rk_records_count_ok', 'count >= 1'),
+    ('profiles', 'profiles_username_ok', $c$username ~ '^[a-z0-9_.-]{3,40}$'$c$)
+  ) v(tbl, name, expr) loop
+    if not exists (select 1 from pg_constraint where conname = c.name) then
+      execute format('alter table public.%I add constraint %I check (%s) not valid', c.tbl, c.name, c.expr);
+    end if;
+  end loop;
+end $$;
+
+-- a record must belong to the same person as its checklist / survey -----------
+create or replace function public.guard_parent_owner() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare owner uuid; rec jsonb := to_jsonb(new);   -- jsonb: one function serves both tables
+begin
+  if tg_table_name = 'sightings' and rec->>'trip_id' is not null then
+    select user_id into owner from public.trips where id = (rec->>'trip_id')::uuid;
+  elsif tg_table_name = 'roadkill_records' and rec->>'survey_id' is not null then
+    select user_id into owner from public.roadkill_surveys where id = (rec->>'survey_id')::uuid;
+  end if;
+  if owner is not null and owner <> new.user_id then
+    raise exception 'record must belong to the owner of its checklist/survey' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_parent_owner on public.sightings;
+create trigger guard_parent_owner before insert or update on public.sightings for each row execute function public.guard_parent_owner();
+drop trigger if exists guard_parent_owner on public.roadkill_records;
+create trigger guard_parent_owner before insert or update on public.roadkill_records for each row execute function public.guard_parent_owner();
+
+-- audit log of admin changes ---------------------------------------------------
+create table if not exists public.audit_log (
+  id         bigserial primary key,
+  at         timestamptz not null default now(),
+  actor      uuid,                       -- auth.uid(); null = SQL editor / server
+  actor_name text default '',
+  tbl        text not null,
+  action     text not null,              -- INSERT | UPDATE | DELETE
+  row_key    text default '',
+  old_row    jsonb,
+  new_row    jsonb
+);
+create index if not exists audit_log_at_idx on public.audit_log(at desc);
+alter table public.audit_log enable row level security;
+drop policy if exists "audit: admin read" on public.audit_log;
+create policy "audit: admin read" on public.audit_log for select using (public.is_admin());
+
+create or replace function public.audit_change() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare o jsonb := case when tg_op <> 'INSERT' then to_jsonb(old) end;
+        n jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
+        k text;
+begin
+  -- profiles: only role / status changes are interesting
+  if tg_table_name = 'profiles' and (tg_op <> 'UPDATE'
+     or (o->>'role' is not distinct from n->>'role' and o->>'status' is not distinct from n->>'status')) then
+    return null;
+  end if;
+  -- the initial catalogue load (SQL editor / setup, no signed-in user) is not audited
+  if auth.uid() is null and tg_op = 'INSERT' and tg_table_name in ('checklist', 'species', 'pack_prices') then
+    return null;
+  end if;
+  k := coalesce(n, o)->>'id';
+  if tg_table_name = 'checklist' then k := (coalesce(n, o)->>'region_code') || ':' || (coalesce(n, o)->>'species_id'); end if;
+  insert into public.audit_log (actor, actor_name, tbl, action, row_key, old_row, new_row)
+  values (auth.uid(), coalesce((select username from public.profiles where id = auth.uid()), ''), tg_table_name, tg_op, coalesce(k, ''), o, n);
+  return null;
+end $$;
+do $$
+declare t text;
+begin
+  foreach t in array array['checklist','species','pack_prices','entitlements','profiles'] loop
+    execute format('drop trigger if exists audit_change on public.%I', t);
+    execute format('create trigger audit_change after insert or update or delete on public.%I for each row execute function public.audit_change()', t);
+  end loop;
+end $$;
+
+-- indexes for dashboard filters -------------------------------------------------
+create index if not exists sightings_trip_idx          on public.sightings(trip_id);
+create index if not exists sightings_region_time_idx   on public.sightings(region_code, observed_at desc);
+create index if not exists sightings_review_idx        on public.sightings(review_status) where review_status = 'pending';
+create index if not exists trips_user_time_idx         on public.trips(user_id, started_at desc);
+create index if not exists trips_region_time_idx       on public.trips(region_code, started_at desc);
+create index if not exists rk_records_survey_idx       on public.roadkill_records(survey_id);
+create index if not exists rk_surveys_user_idx         on public.roadkill_surveys(user_id, started_at desc);
+create index if not exists entitlements_lookup_idx     on public.entitlements(user_id, pack_id, region_code);
+create index if not exists checklist_region_idx        on public.checklist(region_code);
+
 -- ─── storage: sighting photos (user folder = auth uid) & species images ────
 insert into storage.buckets (id, name, public) values ('photos','photos', true)  on conflict (id) do nothing;
 insert into storage.buckets (id, name, public) values ('species','species', true) on conflict (id) do nothing;

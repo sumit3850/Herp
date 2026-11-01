@@ -15,7 +15,7 @@ import { OverviewPage } from "@/pages/overview";
 import { SubmissionsPage } from "@/pages/submissions";
 import { ChecklistsPage } from "@/pages/checklists";
 import { SpeciesPage } from "@/pages/species";
-import { MapPage, PacksPage, ReportsPage, RoadkillPage, UsersPage } from "@/pages/manage";
+import { AuditPage, MapPage, PacksPage, ReportsPage, RoadkillPage, UsersPage } from "@/pages/manage";
 
 /* ── theme: system by default, toggle persists ── */
 function useTheme() {
@@ -108,6 +108,7 @@ function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSig
           {page === "packs" && <PacksPage />}
           {page === "map" && <MapPage />}
           {page === "reports" && <ReportsPage />}
+          {page === "audit" && <AuditPage />}
         </main>
       </SidebarInset>
     </SidebarProvider>

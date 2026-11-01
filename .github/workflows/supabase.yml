@@ -70,6 +70,14 @@ jobs:
           )
           if [ "$n" = "0" ]; then echo "::error title=No such account::No account with that e-mail yet. Sign up in the app first, then run this again."; exit 1; fi
           echo "::notice title=Admin::$ADMIN_EMAIL is now an admin"
+      - name: Self-test (simulated users; all test data is rolled back)
+        run: |
+          out=$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -t -A -F '|' -f supabase/tests/selftest.sql | grep '|')
+          { echo "### Database self-test"; echo "| Area | Check | OK | Detail |"; echo "|---|---|---|---|"; echo "$out" | sed 's/^/| /; s/$/ |/; s/|t|/| ✅ |/; s/|f|/| ❌ |/'; } >> "$GITHUB_STEP_SUMMARY"
+          total=$(echo "$out" | wc -l); failed=$(echo "$out" | awk -F'|' '$3=="f"' | wc -l)
+          echo "$out" | awk -F'|' '$3=="f" {print "::error title=Self-test failed::" $1 " — " $2 " (" $4 ")"}'
+          echo "Self-test: $((total-failed))/$total passed"
+          [ "$failed" -eq 0 ]
       - name: Summary
         run: |
           psql "$SUPABASE_DB_URL" -t -A -F ' | ' -c "select 'species', count(*) from public.species union all select 'checklist entries', count(*) from public.checklist union all select 'regions', count(*) from public.regions union all select 'pack prices', count(*) from public.pack_prices union all select 'users', count(*) from public.profiles union all select 'admins', count(*) from public.profiles where role = 'admin'" \

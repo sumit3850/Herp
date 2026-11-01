@@ -287,6 +287,7 @@
       },
       async reviewTrip(tripId, status) { const db = demoDb(); needAdmin(db); db.sightings.filter((s) => s.trip_id === tripId).forEach((s) => (s.review_status = status)); saveDemo(db); },
       async deleteTrip(id) { const db = demoDb(); needAdmin(db); db.trips = db.trips.filter((t) => t.id !== id); db.sightings = db.sightings.filter((s) => s.trip_id !== id); saveDemo(db); },
+      async auditLog() { const db = demoDb(); needAdmin(db); return (db.audit || []).slice().reverse(); },
       async checklistEntries(region) {
         const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
         return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
@@ -296,7 +297,9 @@
         const list = new Set(db.checklists[region] || []); const s = db.species.find((x) => x.id === speciesId);
         if (status) { list.add(speciesId); db.clStatus[region][speciesId] = status; if (s && !s.regions.includes(region)) s.regions.push(region); }
         else { list.delete(speciesId); delete db.clStatus[region][speciesId]; if (s) s.regions = s.regions.filter((r) => r !== region); }
-        db.checklists[region] = [...list]; saveDemo(db);
+        db.checklists[region] = [...list];
+        const me = demoMe(db); (db.audit ||= []).push({ id: Date.now(), at: new Date().toISOString(), actor: me?.id, actor_name: me?.username, tbl: 'checklist', action: status ? 'UPSERT' : 'DELETE', row_key: region + ':' + speciesId, new_row: status ? { status } : null, old_row: null });
+        saveDemo(db);
       },
       async copyChecklist(from, to) {
         const entries = await this.checklistEntries(from);
@@ -470,6 +473,7 @@
         return { surveys: await withUsernames(surveys), records: await withUsernames(records) };
       },
       async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
+      async auditLog(limit = 300) { return ok(await sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit)); },
       async setChecklistEntry(region, speciesId, status) {
         if (!status) ok(await sb.from('checklist').delete().eq('region_code', region).eq('species_id', speciesId));
         else ok(await sb.from('checklist').upsert({ region_code: region, species_id: speciesId, status }));

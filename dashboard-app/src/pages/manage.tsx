@@ -296,3 +296,48 @@ export function ReportsPage() {
     </div>
   );
 }
+
+/* ═════════════ Audit log ═════════════ */
+const ACTION_LABEL: Record<string, string> = { INSERT: "added", UPSERT: "set", UPDATE: "changed", DELETE: "removed" };
+const TABLE_LABEL: Record<string, string> = { checklist: "Checklist", species: "Species", pack_prices: "Price", entitlements: "Pack access", profiles: "User" };
+function auditSummary(e: import("@/lib/hw").AuditEntry, spName: (id: string) => string, regionName: (c: string) => string) {
+  const n = e.new_row || {}, o = e.old_row || {};
+  if (e.tbl === "checklist") { const [reg, sp] = e.row_key.split(":"); const st = (n as Record<string, string>).status; return `${spName(sp)} · ${regionName(reg)}${st ? ` → ${st}` : ""}${(o as Record<string, string>).status && st && (o as Record<string, string>).status !== st ? ` (was ${(o as Record<string, string>).status})` : ""}`; }
+  if (e.tbl === "species") return spName(e.row_key) || String((n as Record<string, string>).common_name || (o as Record<string, string>).common_name || e.row_key);
+  if (e.tbl === "profiles") return `@${(n as Record<string, string>).username || ""}: role ${(o as Record<string, string>).role} → ${(n as Record<string, string>).role}, status ${(o as Record<string, string>).status} → ${(n as Record<string, string>).status}`;
+  if (e.tbl === "entitlements") return `${(n as Record<string, string>).pack_id || (o as Record<string, string>).pack_id} @ ${(n as Record<string, string>).region_code || (o as Record<string, string>).region_code} (${(n as Record<string, string>).source || ""})`;
+  if (e.tbl === "pack_prices") return `${(n as Record<string, string>).pack_id || (o as Record<string, string>).pack_id} @ ${(n as Record<string, string>).region_code || (o as Record<string, string>).region_code}: ₹${Number((n as Record<string, number>).paise || 0) / 100}`;
+  return e.row_key;
+}
+export function AuditPage() {
+  const { hw, spById, regionName } = useData();
+  const [rows, setRows] = React.useState<import("@/lib/hw").AuditEntry[] | null>(null);
+  const [q, setQ] = React.useState("");
+  React.useEffect(() => { hw.api.admin.auditLog(500).then(setRows).catch(() => setRows([])); }, [hw]);
+  const sp = (id: string) => spById[id]?.common || id;
+  const list = (rows || []).filter((e) => !q || `${e.actor_name} ${e.tbl} ${auditSummary(e, sp, regionName)}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="flex flex-col gap-5">
+      <PageHeader title="Audit log" description="Every change to core checklists, species, prices, pack access and user roles: who made it, and when. Kept by the database and readable only by admins."
+        actions={<Button variant="outline" onClick={() => hw.util.download("audit-log.csv", hw.util.toCSV(list.map((e) => ({ at: e.at, by: e.actor_name, table: e.tbl, action: e.action, item: auditSummary(e, sp, regionName) }))))}><Download /> CSV</Button>} />
+      <Card>
+        <CardHeader className="p-4"><SearchInput value={q} onChange={setQ} placeholder="Filter by person, area or item…" /></CardHeader>
+        {rows === null ? <p className="p-6 text-sm text-muted-foreground">Loading…</p> : !list.length ? <EmptyState icon={Route} title="No changes recorded yet">Edits made in this dashboard appear here.</EmptyState> : (
+          <Table>
+            <TableHeader><TableRow><TableHead>When</TableHead><TableHead>Who</TableHead><TableHead>Area</TableHead><TableHead>Change</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {list.map((e) => (
+                <TableRow key={e.id}>
+                  <TableCell className="whitespace-nowrap text-sm">{fmtDateTime(e.at)}</TableCell>
+                  <TableCell className="text-sm">{e.actor_name ? `@${e.actor_name}` : <span className="text-muted-foreground">system / SQL</span>}</TableCell>
+                  <TableCell><Badge variant="secondary">{TABLE_LABEL[e.tbl] || e.tbl}</Badge></TableCell>
+                  <TableCell className="text-sm"><span className="font-medium">{ACTION_LABEL[e.action] || e.action}</span> {auditSummary(e, sp, regionName)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </div>
+  );
+}

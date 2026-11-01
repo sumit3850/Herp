@@ -13,6 +13,7 @@ export function AuthScreen({ hw, onAuthed }: { hw: HWGlobal; onAuthed: (p: Profi
   const [busy, setBusy] = React.useState(false);
   const emailRef = React.useRef("");
   React.useEffect(() => { hw.api.regions().then(setRegions).catch(() => {}); }, [hw]);
+  React.useEffect(() => { const m = hw.api.linkError(); if (m) toast(m, "error"); }, [hw, toast]);
 
   const [pending, setPending] = React.useState<string | null>(null); // e-mail awaiting confirmation
   const run = async (fn: () => Promise<Profile | null>, email: string) => {
@@ -54,7 +55,7 @@ export function AuthScreen({ hw, onAuthed }: { hw: HWGlobal; onAuthed: (p: Profi
           onSignUp={(e) => {
             e.preventDefault();
             const f = Object.fromEntries(new FormData(e.currentTarget)) as Record<string, string>;
-            run(() => hw.api.signUp({ email: f.email.trim(), password: f.password, username: f.username.trim().toLowerCase(), full_name: f.full_name.trim(), phone: f.phone, home_region: f.home_region }), f.email.trim());
+            run(() => hw.api.signUp({ email: f.email.trim(), password: f.password, username: f.username.trim().toLowerCase(), full_name: f.full_name.trim(), phone: f.phone, home_region: f.home_region, requested_role: f.requested_role || "" }), f.email.trim());
           }}
         />
       </div>
@@ -80,8 +81,12 @@ export function AuthScreen({ hw, onAuthed }: { hw: HWGlobal; onAuthed: (p: Profi
         }}
         onGoogleSignIn={() => hw.api.signInWithGoogle(window.location.href.split("#")[0]).catch((e: Error) => toast(e.message, "error"))}
         onResetPassword={() => {
-          const email = window.prompt("Email address for the reset link:", emailRef.current);
-          if (email) hw.api.resetPassword(email.trim()).then(() => toast(`Reset link sent to ${email}`)).catch((e: Error) => toast(e.message, "error"));
+          const typed = document.querySelector<HTMLInputElement>('input[name="email"]')?.value.trim();
+          const email = typed || window.prompt("E-mail address of your account:", emailRef.current) || "";
+          if (!email) return;
+          hw.api.resetPassword(email.trim())
+            .then(() => toast(`If ${email} has an account, a reset link is on its way. Open it on this device to choose a new password.`))
+            .catch((e: Error) => toast(e.message, "error"));
         }}
         onCreateAccount={() => setMode("signup")}
       />

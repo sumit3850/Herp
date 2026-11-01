@@ -1,0 +1,17 @@
+{
+  "id": "herpwatch-roadkill",
+  "name": "HerpWatch Road-kill Logger",
+  "short_name": "Road-kill",
+  "description": "GPS-tracked road surveys: log road-killed reptiles and amphibians, even with no signal.",
+  "start_url": "app.html?app=roadkill#roadkill",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f1ea",
+  "theme_color": "#7f2a22",
+  "icons": [
+    { "src": "assets/icon-roadkill-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-roadkill-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-roadkill.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -1,6 +1,7 @@
 "use client";
 
-import { LogOut, Smartphone } from "lucide-react";
+import * as React from "react";
+import { Download, LogOut, Smartphone } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,20 @@ export function BrandMark({ className = "size-9" }: { className?: string }) {
   );
 }
 
+/** "Install console" (native prompt when the browser offers one, otherwise instructions). */
+function InstallConsole() {
+  const standalone = typeof window !== "undefined" && (window.matchMedia("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone);
+  const [, force] = React.useReducer((x: number) => x + 1, 0);
+  React.useEffect(() => { window.addEventListener("hw-installable", force); return () => window.removeEventListener("hw-installable", force); }, []);
+  if (standalone) return null;
+  const onClick = async () => {
+    const ev = (window as unknown as { __hwInstall?: Event & { prompt: () => void } }).__hwInstall;
+    if (ev) { ev.prompt(); return; }
+    alert("Install HerpWatch Console:\n\n• Chrome / Edge (computer): click the install icon at the right end of the address bar, or ⋮ menu → Install.\n• Android: ⋮ menu → Add to Home screen.\n• iPhone / iPad (Safari): Share → Add to Home Screen.");
+  };
+  return <Button variant="secondary" size="sm" className="justify-start" onClick={onClick}><Download /> Install console</Button>;
+}
+
 export function App1Sidebar({ active = "overview", onNavigate, badges = {}, user = app1User, appName = "HerpWatch", onSignOut, fieldAppHref = "../app.html", allowed }: App1SidebarProps) {
   return (
     <Sidebar>
@@ -74,6 +89,7 @@ export function App1Sidebar({ active = "overview", onNavigate, badges = {}, user
         ))}
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
+        <InstallConsole />
         <Button variant="outline" size="sm" asChild className="justify-start">
           <a href={fieldAppHref}><Smartphone /> Open field app</a>
         </Button>

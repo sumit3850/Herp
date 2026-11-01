@@ -109,11 +109,30 @@ export function UsersPage() {
   React.useEffect(() => { load().catch(() => setUsers([])); }, [load]);
   const list = (users || []).filter((u) => !q || `${u.full_name} ${u.username} ${u.email} ${u.phone}`.toLowerCase().includes(q.toLowerCase()));
   const pending = (users || []).filter((u) => u.status === "pending").length;
+  const [requests, setRequests] = React.useState<Awaited<ReturnType<typeof hw.api.admin.accessRequests>>>([]);
+  const loadReq = React.useCallback(() => hw.api.admin.accessRequests().then(setRequests).catch(() => setRequests([])), [hw]);
+  React.useEffect(() => { loadReq(); }, [loadReq]);
+  const open = requests.filter((r) => r.status === "pending");
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Users" description={`${users?.length ?? "…"} accounts${pending ? ` · ${pending} awaiting approval` : ""}. Set roles, approve or block accounts, and grant packs (for invoices, researchers, forest staff…).`}
         actions={<Button variant="outline" onClick={() => hw.util.download("users.csv", hw.util.toCSV(list.map(({ packs, ...u }) => ({ ...u, packs: packs.map((e) => `${e.pack}@${e.region}`).join(" ") }))))}><Download /> CSV</Button>} />
+      {open.length > 0 && (
+        <Card className="border-primary/40">
+          <CardHeader className="pb-2"><CardTitle className="text-base">Access requests ({open.length})</CardTitle><CardDescription>People asking for reviewer or admin access to this dashboard.</CardDescription></CardHeader>
+          <CardContent className="flex flex-col divide-y p-0">
+            {open.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center gap-3 px-6 py-3">
+                <div className="min-w-0 flex-1"><p className="font-medium">{r.full_name || r.username} <span className="text-xs text-muted-foreground">@{r.username}</span></p>
+                  <p className="text-sm text-muted-foreground">wants <Badge variant="secondary">{r.requested_role}</Badge> · {fmtDate(r.created_at)}{r.note ? ` · “${r.note}”` : ""}</p></div>
+                <Button size="sm" onClick={() => act(async () => { await hw.api.admin.decideAccess(r.id, true); await Promise.all([loadReq(), load()]); }, `Approved: ${r.username} is now ${r.requested_role}`)}>Approve</Button>
+                <Button size="sm" variant="outline" onClick={() => act(async () => { await hw.api.admin.decideAccess(r.id, false); await loadReq(); }, "Declined")}>Decline</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader className="p-4"><SearchInput value={q} onChange={setQ} placeholder="Name, username, email, phone…" /></CardHeader>
         <Table>
@@ -336,6 +355,68 @@ export function AuditPage() {
               ))}
             </TableBody>
           </Table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ═════════════ Feedback inbox ═════════════ */
+function Stars({ n }: { n: number | null }) {
+  if (!n) return <span className="text-xs text-muted-foreground">—</span>;
+  return <span className="whitespace-nowrap text-sm tracking-tight text-amber-500" aria-label={`${n} of 5`}>{"★".repeat(n)}<span className="text-border">{"★".repeat(5 - n)}</span></span>;
+}
+export function FeedbackPage() {
+  const { hw, spById } = useData();
+  const act = useAction();
+  const [rows, setRows] = React.useState<import("@/lib/hw").FeedbackEntry[] | null>(null);
+  const [filter, setFilter] = React.useState<"" | "new" | "read" | "done" | "corrections">("new");
+  const load = React.useCallback(() => hw.api.admin.feedback().then(setRows).catch(() => setRows([])), [hw]);
+  React.useEffect(() => { load(); }, [load]);
+  const all = rows || [];
+  const avg = (k: "r_guide" | "r_identify" | "r_recording" | "r_overall") => { const v = all.map((r) => r[k]).filter((x): x is number => !!x); return v.length ? (v.reduce((a, b) => a + b, 0) / v.length).toFixed(1) : "—"; };
+  const list = all.filter((r) => !filter || (filter === "corrections" ? !!r.species_id : r.status === filter));
+  return (
+    <div className="flex flex-col gap-5">
+      <PageHeader title="Feedback" description={<>Ratings and corrections sent from the <a className="text-primary hover:underline" href="../feedback.html" target="_blank" rel="noreferrer">feedback page</a> (linked in the app and on every species page).</>}
+        actions={<Button variant="outline" onClick={() => hw.util.download("feedback.csv", hw.util.toCSV(all.map((r) => ({ ...r, species: r.species_id ? spById[r.species_id]?.common : "" }))))}><Download /> CSV</Button>} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard label="Responses" value={num(all.length)} hint={`${all.filter((r) => r.status === "new").length} new`} icon={BarChart3} />
+        <StatCard label="Overall" value={avg("r_overall")} hint="average of 5" icon={BarChart3} />
+        <StatCard label="Field guide" value={avg("r_guide")} icon={BarChart3} />
+        <StatCard label="Identification" value={avg("r_identify")} icon={BarChart3} />
+        <StatCard label="Recording" value={avg("r_recording")} icon={BarChart3} />
+      </div>
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap gap-2 p-4">
+          {([["new", "New"], ["read", "Read"], ["done", "Done"], ["corrections", "Species corrections"], ["", "All"]] as const).map(([k, l]) => (
+            <Button key={k} size="sm" variant={filter === k ? "default" : "outline"} onClick={() => setFilter(k)}>{l}</Button>
+          ))}
+        </CardHeader>
+        {rows === null ? <p className="p-6 text-sm text-muted-foreground">Loading…</p> : !list.length ? <EmptyState icon={BarChart3} title="Nothing here">New feedback appears here as soon as it is sent.</EmptyState> : (
+          <div className="divide-y">
+            {list.map((r) => (
+              <div key={r.id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                    <span className="font-medium">{r.name || "Anonymous"}</span>
+                    {r.email && <a className="text-primary hover:underline" href={`mailto:${r.email}`}>{r.email}</a>}
+                    <span className="text-xs text-muted-foreground">{fmtDateTime(r.created_at)}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <span>Overall <Stars n={r.r_overall} /></span><span>Guide <Stars n={r.r_guide} /></span><span>ID <Stars n={r.r_identify} /></span><span>Recording <Stars n={r.r_recording} /></span>
+                  </div>
+                  {r.species_id && <p className="rounded-md bg-amber-500/10 p-2 text-sm"><b>Correction · {spById[r.species_id]?.common || r.species_id}:</b> {r.correction}</p>}
+                  {r.comment && <p className="text-sm">{r.comment}</p>}
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  {(["new", "read", "done"] as const).map((st) => (
+                    <Button key={st} size="sm" variant={r.status === st ? "secondary" : "ghost"} onClick={() => act(async () => { await hw.api.admin.setFeedbackStatus(r.id, st); await load(); })}>{st}</Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </Card>
     </div>

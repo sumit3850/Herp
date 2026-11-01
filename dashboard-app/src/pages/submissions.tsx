@@ -4,6 +4,8 @@ import { AlertTriangle, Check, Download, Eye, Inbox, MapPin, Trash2, X } from "l
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -57,8 +59,12 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
     && (!q || `${s.username} ${s.species_id ? spById[s.species_id]?.common + " " + spById[s.species_id]?.sci : s.species_text} ${s.notes}`.toLowerCase().includes(q)));
 
   const refresh = () => reload(["submissions"]);
-  const reviewTrip = (t: Trip, st: ReviewStatus) => act(async () => { await hw.api.admin.reviewTrip(t.id, st); await refresh(); }, `Checklist ${st}`);
-  const reviewOne = (s: Sighting, st: ReviewStatus) => act(async () => { await hw.api.admin.review(s.id, st); await refresh(); });
+  // rejections always carry a reason, shown to the observer in the field app
+  const [rejecting, setRejecting] = React.useState<null | { kind: "trip"; t: Trip } | { kind: "one"; s: Sighting }>(null);
+  const reviewTrip = (t: Trip, st: ReviewStatus, note = "") => st === "rejected" && !note ? setRejecting({ kind: "trip", t })
+    : act(async () => { await hw.api.admin.reviewTrip(t.id, st, note); await refresh(); }, `Checklist ${st}`);
+  const reviewOne = (s: Sighting, st: ReviewStatus, note = "") => st === "rejected" && !note ? setRejecting({ kind: "one", s })
+    : act(async () => { await hw.api.admin.review(s.id, st, note); await refresh(); }, st === "rejected" ? "Rejected, observer notified" : undefined);
   const pendingTrips = tripRows.filter((t) => tripStatus(t) === "pending");
 
   // keep the open sheet in sync after a reload
@@ -184,6 +190,8 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
         </TabsContent>
       </Tabs>
 
+      <RejectDialog target={rejecting} onClose={() => setRejecting(null)}
+        onConfirm={(note) => { const r = rejecting!; setRejecting(null); r.kind === "trip" ? reviewTrip(r.t, "rejected", note) : reviewOne(r.s, "rejected", note); }} />
       <Sheet open={!!openTrip} onOpenChange={(o) => !o && setOpen(null)}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
           {openTrip && (
@@ -224,6 +232,7 @@ function TripDetail({ trip, offList, onReview, onReviewOne, onDelete }: { trip: 
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2"><SpeciesName id={s.species_id} text={s.species_text} compact /><span className="font-mono text-sm">×{s.count}</span></div>
               <p className="text-xs text-muted-foreground">{[s.life_stage, s.sex, s.notes].filter(Boolean).join(" · ") || (s.species_id ? spById[s.species_id]?.sci : "")}</p>
+              {s.review_status === "rejected" && (s as Sighting & { review_note?: string }).review_note && <p className="mt-1 text-xs text-destructive">Reason: {(s as Sighting & { review_note?: string }).review_note}</p>}
               {offList(s) && <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="size-3" /> Not on the core checklist for {regionName(s.region_code)}. Verify, or add it to the checklist.</p>}
               {(s.photos?.length ?? 0) > 0 && <div className="mt-2 flex gap-2">{s.photos!.map((p) => <a key={p} href={p} target="_blank" rel="noreferrer"><img src={p} alt="" className="size-14 rounded-md object-cover" /></a>)}</div>}
             </div>
@@ -242,5 +251,29 @@ function TripDetail({ trip, offList, onReview, onReviewOne, onDelete }: { trip: 
         <Button variant="ghost" className="ml-auto text-destructive" onClick={onDelete}><Trash2 /> Delete</Button>
       </div>
     </div>
+  );
+}
+
+const REASONS = [
+  "Photo needed to confirm this species",
+  "Identification doesn't match the photo / description",
+  "Outside the known range: please add a photo or details",
+  "Location looks wrong (check GPS)",
+  "Duplicate of another record",
+];
+function RejectDialog({ target, onClose, onConfirm }: { target: null | { kind: "trip"; t: Trip } | { kind: "one"; s: Sighting }; onClose: () => void; onConfirm: (note: string) => void }) {
+  const { spById } = useData();
+  const [note, setNote] = React.useState("");
+  React.useEffect(() => { if (target) setNote(""); }, [target]);
+  const what = !target ? "" : target.kind === "trip" ? `all ${target.t.sightings.length} records of this checklist` : (target.s.species_id ? spById[target.s.species_id]?.common : target.s.species_text) || "this record";
+  return (
+    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>Reject {what}?</DialogTitle><DialogDescription>Tell the observer why. They see this note next to the record in the field app, so they can fix it or add a photo.</DialogDescription></DialogHeader>
+        <div className="flex flex-wrap gap-2">{REASONS.map((r) => <button key={r} type="button" onClick={() => setNote(r)} className={`rounded-full border px-3 py-1 text-xs transition-colors hover:bg-accent ${note === r ? "border-primary bg-primary/10" : ""}`}>{r}</button>)}</div>
+        <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason for the observer…" rows={3} maxLength={500} autoFocus />
+        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button variant="destructive" disabled={!note.trim()} onClick={() => onConfirm(note.trim())}><X /> Reject with this reason</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

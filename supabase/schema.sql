@@ -554,6 +554,33 @@ create index if not exists rk_surveys_user_idx         on public.roadkill_survey
 create index if not exists entitlements_lookup_idx     on public.entitlements(user_id, pack_id, region_code);
 create index if not exists checklist_region_idx        on public.checklist(region_code);
 
+-- ─── feedback (public form + in-app) ───────────────────────────────────────
+-- Anyone may send feedback (signed in or not); only admins read it.
+create table if not exists public.feedback (
+  id          uuid primary key default gen_random_uuid(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid references auth.users(id) on delete set null,
+  name        text not null default '',
+  email       text not null default '',
+  r_guide     smallint check (r_guide between 1 and 5),
+  r_identify  smallint check (r_identify between 1 and 5),
+  r_recording smallint check (r_recording between 1 and 5),
+  r_overall   smallint not null check (r_overall between 1 and 5),
+  species_id  text references public.species(id) on delete set null,   -- "this species page has a mistake"
+  correction  text not null default '' check (length(correction) <= 1000),
+  comment     text not null default '' check (length(comment) <= 1500),
+  page        text not null default '',
+  status      text not null default 'new' check (status in ('new','read','done')),
+  check (length(name) <= 120 and length(email) <= 200)
+);
+create index if not exists feedback_created_idx on public.feedback(created_at desc);
+alter table public.feedback enable row level security;
+drop policy if exists "feedback: anyone sends" on public.feedback;
+create policy "feedback: anyone sends" on public.feedback for insert to anon, authenticated
+  with check (status = 'new' and (user_id is null or user_id = auth.uid()));
+drop policy if exists "feedback: admin" on public.feedback;
+create policy "feedback: admin" on public.feedback for all using (public.is_admin()) with check (public.is_admin());
+
 -- ─── storage: sighting photos (user folder = auth uid) & species images ────
 insert into storage.buckets (id, name, public) values ('photos','photos', true)  on conflict (id) do nothing;
 insert into storage.buckets (id, name, public) values ('species','species', true) on conflict (id) do nothing;

@@ -76,6 +76,14 @@ begin
       insert into public.trips (id, user_id, started_at) values (gen_random_uuid(), F, now());
       r := r || jsonb_build_object('a','2 visitor','t','cannot submit records without signing in','ok', false,'d', 'insert succeeded');
     exception when others then r := r || jsonb_build_object('a','2 visitor','t','cannot submit records without signing in','ok', true,'d', sqlerrm); end;
+    insert into public.feedback (name, r_overall, comment, page) values ('hwtest visitor', 5, 'great app', 'selftest');
+    r := r || jsonb_build_object('a','2 visitor','t','can send feedback without an account','ok', true,'d', '');
+    select count(*) into n from public.feedback;
+    r := r || jsonb_build_object('a','2 visitor','t','cannot read anyone''s feedback','ok', n = 0,'d', n || ' visible');
+    begin
+      insert into public.feedback (name, r_overall) values ('x', 9);
+      r := r || jsonb_build_object('a','2 visitor','t','invalid ratings are rejected','ok', false,'d', 'rating 9 accepted');
+    exception when others then r := r || jsonb_build_object('a','2 visitor','t','invalid ratings are rejected','ok', true,'d', sqlerrm); end;
     reset role;
 
     -- ── field user ───────────────────────────────────────────────────────────
@@ -133,6 +141,13 @@ begin
       insert into public.checklist (region_code, species_id) values (g_region, extra_sp);
       r := r || jsonb_build_object('a','3 field user','t','cannot edit core checklists','ok', false,'d', 'insert succeeded');
     exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot edit core checklists','ok', true,'d', sqlerrm); end;
+    begin
+      perform public.claim_first_admin();
+      r := r || jsonb_build_object('a','3 field user','t','cannot claim admin once an admin exists','ok', false,'d', 'claimed');
+    exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot claim admin once an admin exists','ok', true,'d', sqlerrm); end;
+    perform public.request_access('reviewer', 'I run night walks in this state');
+    select count(*) into n from public.access_requests where user_id = F and status = 'pending';
+    r := r || jsonb_build_object('a','3 field user','t','can request reviewer access','ok', n = 1,'d', '');
     select count(*) into n from public.audit_log;
     r := r || jsonb_build_object('a','3 field user','t','cannot read the audit log','ok', n = 0,'d', n || ' visible');
     reset role;
@@ -169,6 +184,13 @@ begin
     r := r || jsonb_build_object('a','5 admin','t','can edit species','ok', n = 1,'d', '');
     select count(*) into n from public.trips where id = T1;
     r := r || jsonb_build_object('a','5 admin','t','sees every submitted checklist','ok', n = 1,'d', '');
+    perform public.decide_access((select id from public.access_requests where user_id = F and status = 'pending'), true);
+    select role into v from public.profiles where id = F;
+    r := r || jsonb_build_object('a','5 admin','t','approving a request grants the role','ok', v = 'reviewer','d', 'field user is now ' || coalesce(v, '?'));
+    perform set_config('hw.role_change_ok', '', true);
+    update public.profiles set role = 'user' where id = F;   -- back to a plain field user for the next tests
+    select count(*) into n from public.feedback where page = 'selftest';
+    r := r || jsonb_build_object('a','5 admin','t','can read feedback','ok', n = 1,'d', n || ' test feedback');
     select count(*) into n from public.audit_log;
     r := r || jsonb_build_object('a','5 admin','t','can read the audit log','ok', n > 0,'d', n || ' entries');
     reset role;

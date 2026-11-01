@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HerpWatch Road-kill Logger</title>
+<meta name="description" content="Install the HerpWatch Road-kill Logger: GPS-tracked road surveys that work with no signal.">
+<meta name="theme-color" content="#7f2a22">
+<link rel="manifest" href="roadkill-manifest.json">
+<link rel="icon" href="assets/icon-roadkill.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-roadkill-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+body{display:grid;place-items:center;min-height:100dvh;padding:24px 16px}
+.box{max-width:460px;width:100%}
+.box img.logo{width:72px;height:72px;border-radius:18px}
+h1{font-size:30px;font-weight:650;letter-spacing:-.03em;margin:14px 0 6px}
+.steps{display:flex;flex-direction:column;gap:12px;margin:18px 0}
+.step{display:flex;gap:12px;align-items:flex-start;font-size:14.5px}
+.step span.n{flex-shrink:0;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#f6e7e4;color:#7f2a22;font-weight:700;font-size:13px}
+.btn-rk{background:#7f2a22;color:#fff}
+</style>
+</head>
+<body>
+<main class="box">
+  <img class="logo" src="assets/icon-roadkill-192.png" alt="">
+  <h1>Road-kill Logger</h1>
+  <p class="muted">A dedicated app for road-survey teams. It records your GPS track (survey effort), drops a point at every carcass, and reports kills per 100 km. It keeps working with no signal and uploads when you’re back online.</p>
+  <div class="steps">
+    <div class="step"><span class="n">1</span><p><b>Install it</b> on the phone used on surveys (no app store needed).</p></div>
+    <div class="step"><span class="n">2</span><p><b>Sign in once</b> with your HerpWatch account while you have internet. It’s the same account as the field app.</p></div>
+    <div class="step"><span class="n">3</span><p><b>Open it from the home-screen icon</b> on every survey. Have a passenger log the records, never the driver.</p></div>
+  </div>
+  <div class="row wrap">
+    <button class="btn btn-rk" data-install><span data-ic="download"></span> Install Road-kill Logger</button>
+    <a class="btn btn-ghost" href="app.html?app=roadkill#roadkill"><span data-ic="play"></span> Start a survey in the browser</a>
+  </div>
+  <p class="tiny muted" style="margin-top:18px">Part of <a href="index.html">HerpWatch</a> · <a href="feedback.html">Send feedback</a></p>
+</main>
+<script src="assets/icons.js"></script>
+<script src="install.js"></script>
+<script>
+document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = HWI(el.dataset.ic)));
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

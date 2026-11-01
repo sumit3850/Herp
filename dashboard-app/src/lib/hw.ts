@@ -40,16 +40,26 @@ export interface Stats {
   roadkill_species: { species_id: string; common: string; sci: string; n: number }[];
 }
 export interface AuditEntry { id: number; at: string; actor: string | null; actor_name: string; tbl: string; action: string; row_key: string; old_row: Record<string, unknown> | null; new_row: Record<string, unknown> | null }
+export interface FeedbackEntry { id: string; created_at: string; user_id: string | null; name: string; email: string; r_guide: number | null; r_identify: number | null; r_recording: number | null; r_overall: number; species_id: string | null; correction: string; comment: string; page: string; status: "new" | "read" | "done" }
+export interface AccessRequest { id: string; user_id: string; requested_role: "reviewer" | "admin"; note: string; status: "pending" | "approved" | "declined"; created_at: string; decided_at?: string | null }
 export interface ChecklistEntry { species_id: string; status: ChecklistStatus }
 
 export interface HWApi {
   mode: "demo" | "supabase";
   session(): Promise<Profile | null>;
   signIn(email: string, password: string): Promise<Profile>;
-  signUp(f: { email: string; password: string; username: string; full_name: string; phone?: string; home_region: string }): Promise<Profile | null>;
+  signUp(f: { email: string; password: string; username: string; full_name: string; phone?: string; home_region: string; requested_role?: string }): Promise<Profile | null>;
   signInWithGoogle(redirectTo?: string): Promise<void>;
   resetPassword(email: string): Promise<void>;
   resendConfirmation(email: string): Promise<void>;
+  isRecovery(): boolean;
+  hasAdmin(): Promise<boolean>;
+  claimFirstAdmin(): Promise<Profile>;
+  requestAccess(role: "reviewer" | "admin", note?: string): Promise<AccessRequest>;
+  myAccessRequest(): Promise<AccessRequest | null>;
+  linkError(): string;
+  updatePassword(password: string): Promise<Profile | null>;
+  submitFeedback(f: Record<string, unknown>): Promise<void>;
   checklistEntries(region: string): Promise<ChecklistEntry[]>;
   onCatalogChange?(cb: (what: string) => void): () => void;
   signOut(): Promise<void>;
@@ -75,14 +85,18 @@ export interface HWApi {
     revoke(entId: string): Promise<void>;
     trips(): Promise<Trip[]>;
     sightings(): Promise<Sighting[]>;
-    review(id: string, status: ReviewStatus): Promise<void>;
-    reviewTrip(tripId: string, status: ReviewStatus): Promise<void>;
+    review(id: string, status: ReviewStatus, note?: string): Promise<void>;
+    reviewTrip(tripId: string, status: ReviewStatus, note?: string): Promise<void>;
     deleteSighting(id: string): Promise<void>;
     deleteTrip(id: string): Promise<void>;
     roadkill(): Promise<{ surveys: Survey[]; records: RoadkillRecord[] }>;
     deleteRoadkill(id: string): Promise<void>;
     deleteSurvey(id: string): Promise<void>;
     auditLog(limit?: number): Promise<AuditEntry[]>;
+    feedback(): Promise<FeedbackEntry[]>;
+    accessRequests(): Promise<(AccessRequest & { username?: string; full_name?: string })[]>;
+    decideAccess(id: string, approve: boolean): Promise<void>;
+    setFeedbackStatus(id: string, status: string): Promise<void>;
   };
 }
 

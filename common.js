@@ -9,7 +9,38 @@
   const C = window.HW_CONFIG || {};
   const SEED = window.HW_SEED;
   const DEMO = !C.SUPABASE_URL;
-  const sb = !DEMO && window.supabase ? window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY) : null;
+  // navigator.onLine lies on many phones, so connectivity = the outcome of the last real request.
+  // Every request is capped (no endless "Saving…" with a weak signal).
+  const net = { ok: true, at: 0 };
+  const setNet = (okNow) => { if (net.ok !== okNow) { net.ok = okNow; dispatchEvent(new CustomEvent('hw-net', { detail: okNow })); } net.at = Date.now(); };
+  const timedFetch = async (url, opts = {}) => {
+    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), /\/functions\/v1\//.test(String(url)) ? 30000 : 15000);
+    if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort());
+    try { const r = await fetch(url, { ...opts, signal: ctrl.signal }); setNet(true); return r; }
+    catch (e) { setNet(false); throw new Error(e.name === 'AbortError' ? 'No connection (request timed out)' : 'No connection'); }
+    finally { clearTimeout(t); }
+  };
+  // e-mail links (confirm / reset password) arrive as #access_token=…&type=recovery or #error=…
+  const _linkParams = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + (location.search || '').replace(/^\?/, ''));
+  let _recovery = _linkParams.get('type') === 'recovery';
+  const _linkError = _linkParams.get('error_description') || _linkParams.get('error') || '';
+  const sb = !DEMO && window.supabase ? window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY, { global: { fetch: timedFetch } }) : null;
+  const authListeners = new Set();
+  if (sb) sb.auth.onAuthStateChange((evt, session) => { if (evt === 'PASSWORD_RECOVERY') _recovery = true; authListeners.forEach((f) => { try { f(evt, session); } catch {} }); });
+  // Plain-language versions of Supabase Auth errors, incl. the built-in mailer limits
+  function authError(error, email) {
+    const m = String(error?.message || error || ''), code = error?.code || error?.error_code || '';
+    if (/rate limit/i.test(m) || code === 'over_email_send_rate_limit' || error?.status === 429)
+      return codedError('email_rate_limit', 'Too many e-mails were sent in a short time. Supabase’s built-in mailer allows only a few per hour, so please wait a while and try again (the admin can add their own e-mail server in Supabase to remove this limit).');
+    if (/not authorized/i.test(m) || code === 'email_address_not_authorized')
+      return codedError('email_not_authorized', `Supabase’s built-in mailer can only send to the project team’s addresses, so ${email || 'this address'} was refused. The admin needs to set up an e-mail server (SMTP) in Supabase, or turn off "Confirm email".`);
+    if (/error sending|sending.*email|smtp/i.test(m))
+      return codedError('email_send_failed', 'Supabase could not send the e-mail. The admin needs to check the e-mail (SMTP) settings in Supabase, or turn off "Confirm email" for sign-ups.');
+    if (/signups? not allowed|signup.*disabled/i.test(m) || code === 'signup_disabled') return codedError('signup_disabled', 'New sign-ups are switched off for this project.');
+    if (/expired|invalid.*(link|token)|otp/i.test(m)) return codedError('link_expired', 'This e-mail link has expired or was already used. Request a new one.');
+    return Object.assign(new Error(m), { code });
+  }
+  const isNetError = (e) => /no connection|failed to fetch|network|load failed|timed out|offline/i.test(String(e?.message || e));
 
   // ───────── constants ─────────
   const IUCN = {
@@ -64,6 +95,32 @@
     }
     return best;
   }
+  // ── durable storage (pattern from the Island Explorer driver app) ──
+  // Field data is written to localStorage + IndexedDB + the Cache API. Some mobile
+  // browsers clear localStorage between sessions; whichever store survived is used
+  // to restore the others, so an unsynced checklist is never lost.
+  function idb() {
+    return new Promise((res) => {
+      try { const r = indexedDB.open('hw_durable', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
+      catch { res(null); }
+    });
+  }
+  const idbSet = async (k, v) => { const db = await idb(); if (!db) return; try { const tx = db.transaction('kv', 'readwrite'); v == null ? tx.objectStore('kv').delete(k) : tx.objectStore('kv').put(v, k); } catch {} };
+  const idbGet = async (k) => { const db = await idb(); if (!db) return null; return new Promise((res) => { try { const g = db.transaction('kv').objectStore('kv').get(k); g.onsuccess = () => res(g.result ?? null); g.onerror = () => res(null); } catch { res(null); } }); };
+  const cacheSet = async (k, v) => { try { const c = await caches.open('hw_durable'); const u = '/__hw_durable/' + encodeURIComponent(k); v == null ? await c.delete(u) : await c.put(u, new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } })); } catch {} };
+  const cacheGet = async (k) => { try { const r = await (await caches.open('hw_durable')).match('/__hw_durable/' + encodeURIComponent(k)); return r ? r.json() : null; } catch { return null; } };
+  function durSet(k, v) { v == null ? (() => { try { localStorage.removeItem(k); } catch {} })() : lsSet(k, v); idbSet(k, v); cacheSet(k, v); }
+  async function durGet(k) {
+    let v = lsGet(k, null); if (v != null) return v;
+    v = await idbGet(k); if (v != null) { lsSet(k, v); return v; }
+    v = await cacheGet(k); if (v != null) { lsSet(k, v); idbSet(k, v); return v; }
+    return null;
+  }
+  const storageWorks = () => { try { localStorage.setItem('hw_ck', '1'); const ok = localStorage.getItem('hw_ck') === '1'; localStorage.removeItem('hw_ck'); return ok; } catch { return false; } };
+  try { navigator.storage?.persist?.(); } catch {}
+  const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isInAppBrowser = () => /WhatsApp|FBAN|FBAV|FB_IAB|Instagram|Line\/|Telegram|Snapchat/i.test(navigator.userAgent || '');
+
   // Errors with a machine-readable code so the UI can offer the right next step
   const codedError = (code, message) => Object.assign(new Error(message), { code });
   // Public maps never show exact points: ~1 km normally, ~10 km for sensitive species
@@ -196,10 +253,27 @@
       const db = demoDb();
       if (db.users.some((u) => u.email.toLowerCase() === f.email.toLowerCase())) throw codedError('already_registered', `${f.email} already has an account (one account works for the app and the dashboard). Sign in instead.`);
       const u = { id: uid(), email: f.email, password: f.password, username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, role: 'user', status: 'approved' };
-      db.users.push(u); db.session = u.id; saveDemo(db); return u;
+      db.users.push(u);
+      if (['reviewer', 'admin'].includes(f.requested_role)) (db.access ||= []).push({ id: uid(), user_id: u.id, requested_role: f.requested_role, note: 'Requested at sign-up', status: 'pending', created_at: new Date().toISOString() }); db.session = u.id; saveDemo(db); return u;
     },
     async resetPassword() { throw new Error('Password reset needs the Supabase back-end (demo mode).'); },
     async resendConfirmation() {},
+    isRecovery: () => false, linkError: () => '', onAuth: () => () => {},
+    async hasAdmin() { return demoDb().users.some((u) => u.role === 'admin'); },
+    async claimFirstAdmin() { const db = demoDb(), me = demoMe(db); if (db.users.some((u) => u.role === 'admin')) throw new Error('This project already has an admin. Ask them to give you access.'); me.role = 'admin'; saveDemo(db); return me; },
+    async requestAccess(role, note = '') {
+      const db = demoDb(), me = demoMe(db); db.access ||= [];
+      let r = db.access.find((x) => x.user_id === me.id && x.status === 'pending');
+      if (r) Object.assign(r, { requested_role: role, note, created_at: new Date().toISOString() });
+      else db.access.push((r = { id: uid(), user_id: me.id, requested_role: role, note, status: 'pending', created_at: new Date().toISOString() }));
+      saveDemo(db); return r;
+    },
+    async myAccessRequest() { const db = demoDb(), me = demoMe(db); return (db.access || []).filter((x) => x.user_id === me?.id).slice(-1)[0] || null; },
+    async updatePassword() {},
+    async submitFeedback(f) {
+      if (!f.r_overall || f.r_overall < 1 || f.r_overall > 5) throw new Error('Please rate your overall experience.');
+      const db = demoDb(); (db.feedback ||= []).push({ id: uid(), created_at: new Date().toISOString(), user_id: db.session, status: 'new', ...f }); saveDemo(db);
+    },
     async checklistEntries(region) {
       const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
       return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
@@ -251,8 +325,8 @@
       records.forEach((r) => db.roadkill.push({ ...r, survey_id: survey.id, user_id: me.id }));
       saveDemo(db); return true;
     },
-    async myTrips() { const db = demoDb(), me = demoMe(db); return db.trips.filter((t) => t.user_id === me?.id).map((t) => ({ ...t, sightings: db.sightings.filter((s) => s.trip_id === t.id) })); },
-    async mySurveys() { const db = demoDb(), me = demoMe(db); return db.surveys.filter((t) => t.user_id === me?.id).map((t) => ({ ...t, records: db.roadkill.filter((s) => s.survey_id === t.id) })); },
+    async myTrips() { const db = demoDb(), me = demoMe(db); return db.trips.filter((t) => t.user_id === me?.id).sort((a, b) => String(b.started_at).localeCompare(a.started_at)).map((t) => ({ ...t, sightings: db.sightings.filter((s) => s.trip_id === t.id) })); },
+    async mySurveys() { const db = demoDb(), me = demoMe(db); return db.surveys.filter((t) => t.user_id === me?.id).sort((a, b) => String(b.started_at).localeCompare(a.started_at)).map((t) => ({ ...t, records: db.roadkill.filter((s) => s.survey_id === t.id) })); },
     async publicStats() { const db = demoDb(); return computeStats(db.species, db.sightings.filter((s) => s.review_status !== 'rejected'), db.roadkill, db.surveys); },
     async publicPoints() {
       const db = demoDb(), sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
@@ -278,14 +352,18 @@
       async grant(user_id, pack, region, days) { const db = demoDb(); const me = needAdmin(db); db.entitlements.push({ id: uid(), user_id, pack, region, source: 'manual', granted_by: me.username, valid_until: days ? new Date(Date.now() + days * 864e5).toISOString() : null }); saveDemo(db); },
       async revoke(entId) { const db = demoDb(); needAdmin(db); const e = db.entitlements.find((x) => x.id === entId); if (e) e.valid_until = new Date().toISOString(); saveDemo(db); },
       async sightings() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u.username])); return db.sightings.map((s) => ({ ...s, username: un[s.user_id] })).sort((a, b) => String(b.observed_at).localeCompare(a.observed_at)); },
-      async review(id, status) { const db = demoDb(); needAdmin(db); db.sightings.find((s) => s.id === id).review_status = status; saveDemo(db); },
+      async review(id, status, note = '') { const db = demoDb(); const me = needAdmin(db); Object.assign(db.sightings.find((s) => s.id === id), { review_status: status, review_note: note, reviewed_by: me.id, reviewed_at: new Date().toISOString() }); saveDemo(db); },
       async deleteSighting(id) { const db = demoDb(); needAdmin(db); db.sightings = db.sightings.filter((s) => s.id !== id); saveDemo(db); },
       async trips() {
         const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u]));
         return db.trips.map((t) => ({ ...t, username: un[t.user_id]?.username, full_name: un[t.user_id]?.full_name, sightings: db.sightings.filter((s) => s.trip_id === t.id) }))
           .sort((a, b) => String(b.started_at).localeCompare(a.started_at));
       },
-      async reviewTrip(tripId, status) { const db = demoDb(); needAdmin(db); db.sightings.filter((s) => s.trip_id === tripId).forEach((s) => (s.review_status = status)); saveDemo(db); },
+      async reviewTrip(tripId, status, note = '') { const db = demoDb(); const me = needAdmin(db); db.sightings.filter((s) => s.trip_id === tripId).forEach((s) => Object.assign(s, { review_status: status, review_note: note, reviewed_by: me.id, reviewed_at: new Date().toISOString() })); saveDemo(db); },
+      async accessRequests() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u])); return (db.access || []).map((r) => ({ ...r, username: un[r.user_id]?.username, full_name: un[r.user_id]?.full_name })).reverse(); },
+      async decideAccess(id, approve) { const db = demoDb(); const me = needAdmin(db); const r = db.access.find((x) => x.id === id); Object.assign(r, { status: approve ? 'approved' : 'declined', decided_by: me.id, decided_at: new Date().toISOString() }); if (approve) db.users.find((u) => u.id === r.user_id).role = r.requested_role; saveDemo(db); },
+      async feedback() { const db = demoDb(); needAdmin(db); return (db.feedback || []).slice().reverse(); },
+      async setFeedbackStatus(id, status) { const db = demoDb(); needAdmin(db); const f = (db.feedback || []).find((x) => x.id === id); if (f) f.status = status; saveDemo(db); },
       async deleteTrip(id) { const db = demoDb(); needAdmin(db); db.trips = db.trips.filter((t) => t.id !== id); db.sightings = db.sightings.filter((s) => s.trip_id !== id); saveDemo(db); },
       async auditLog() { const db = demoDb(); needAdmin(db); return (db.audit || []).slice().reverse(); },
       async checklistEntries(region) {
@@ -353,11 +431,20 @@
   async function loadProfile() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return (_profile = null);
-    let p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle());
+    let p;
+    try { p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle()); }
+    catch (e) {
+      // offline: keep working with the last profile saved on this device
+      const cached = isNetError(e) ? await durGet('hw_profile_' + session.user.id) : null;
+      if (cached) return (_profile = { ...cached, offline: true });
+      throw e;
+    }
     // one account for app + dashboard: if the profile row is missing (e.g. the user signed up
     // before the database was set up), the server creates it from the sign-up details
     if (!p) { const { data } = await sb.rpc('ensure_profile'); p = data && data.id ? data : null; }
-    return (_profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, username: (session.user.email || '').split('@')[0], role: 'user', status: 'approved' });
+    _profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, username: (session.user.email || '').split('@')[0], role: 'user', status: 'approved' };
+    durSet('hw_profile_' + session.user.id, _profile);
+    return _profile;
   }
   const sbApi = {
     mode: 'supabase',
@@ -368,7 +455,7 @@
       if (error) {
         if (/not confirmed/i.test(error.message)) throw codedError('email_not_confirmed', `Please confirm your e-mail first: open the link we sent to ${email}.`);
         if (/invalid login credentials/i.test(error.message)) throw codedError('bad_credentials', 'Wrong e-mail or password. The same account works in the app and the dashboard; use "Reset password" if you forgot it.');
-        throw new Error(error.message);
+        throw authError(error, email);
       }
       const p = await loadProfile();
       if (p?.status === 'blocked') { await sb.auth.signOut(); throw new Error('This account is blocked. Contact the administrator.'); }
@@ -376,17 +463,26 @@
     },
     async signUp(f) {
       const { data, error } = await sb.auth.signUp({ email: f.email, password: f.password,
-        options: { emailRedirectTo: location.href.split('#')[0], data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region } } });
+        options: { emailRedirectTo: location.href.split('#')[0].split('?')[0], data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, requested_role: f.requested_role || '' } } });
       if (error) {
         if (/already registered|already exists/i.test(error.message)) throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
-        throw new Error(error.message);
+        throw authError(error, f.email);
       }
       // Supabase hides existing e-mails by returning a user with no identities
       if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
         throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
       return loadProfile();   // null when e-mail confirmation is required
     },
-    async resendConfirmation(email) { ok(await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: location.href.split('#')[0] } })); },
+    // ── dashboard access ──
+    async hasAdmin() { const { data, error } = await sb.rpc('has_admin'); if (error) return true; return !!data; },
+    async claimFirstAdmin() { ok(await sb.rpc('claim_first_admin')); return loadProfile(); },
+    async requestAccess(role, note = '') { return ok(await sb.rpc('request_access', { p_role: role, p_note: note })); },
+    async myAccessRequest() { const me = _profile || (await loadProfile()); return ok(await sb.from('access_requests').select('*').eq('user_id', me.id).order('created_at', { ascending: false }).limit(1).maybeSingle()); },
+    async submitFeedback(f) {
+      const { data: { session } } = await sb.auth.getSession();
+      ok(await sb.from('feedback').insert({ ...f, user_id: session?.user?.id || null }));
+    },
+    async resendConfirmation(email) { const { error } = await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: location.href.split('#')[0].split('?')[0] } }); if (error) throw authError(error, email); },
     async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
     /** Live catalogue updates (admin edits a checklist / species / price) via Supabase Realtime. */
     onCatalogChange(cb) {
@@ -397,7 +493,24 @@
         .subscribe();
       return () => sb.removeChannel(ch);
     },
-    async resetPassword(email) { ok(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] })); },
+    async resetPassword(email) {
+      if (!String(email).includes('@')) throw codedError('use_email', 'Enter the e-mail address of your account.');
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0].split('?')[0] });
+      if (error) throw authError(error, email);
+    },
+    /** true when the page was opened from a "reset password" e-mail */
+    isRecovery: () => _recovery,
+    /** message when an e-mail link was expired/invalid ('' otherwise) */
+    linkError: () => (_linkError ? authError({ message: _linkError }).message : ''),
+    async updatePassword(password) {
+      if (!password || password.length < 6) throw codedError('weak_password', 'Use at least 6 characters.');
+      const { error } = await sb.auth.updateUser({ password });
+      if (error) throw authError(error);
+      _recovery = false;
+      try { history.replaceState(null, '', location.pathname); } catch {}
+      return loadProfile();
+    },
+    onAuth(cb) { authListeners.add(cb); return () => authListeners.delete(cb); },
     async signOut() { await sb.auth.signOut(); _profile = null; },
     async signInWithGoogle(redirectTo) { ok(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo || location.href.split('#')[0] } })); },
     async updateProfile(p) { const me = await loadProfile(); ok(await sb.from('profiles').update(p).eq('id', me.id)); return loadProfile(); },
@@ -462,8 +575,12 @@
       async grant(user_id, pack, region, days) { ok(await sb.rpc('grant_pack', { p_user: user_id, p_pack: pack, p_region: region, p_days: days || null })); },
       async revoke(entId) { ok(await sb.from('entitlements').update({ valid_until: new Date().toISOString() }).eq('id', entId)); },
       async sightings() { return withUsernames(ok(await sb.from('sightings').select('*').order('observed_at', { ascending: false }).limit(5000))); },
-      async review(id, status) { ok(await sb.from('sightings').update({ review_status: status }).eq('id', id)); },
-      async reviewTrip(tripId, status) { ok(await sb.from('sightings').update({ review_status: status }).eq('trip_id', tripId)); },
+      async review(id, status, note = '') { ok(await sb.from('sightings').update({ review_status: status, review_note: note || '' }).eq('id', id)); },
+      async reviewTrip(tripId, status, note = '') { ok(await sb.from('sightings').update({ review_status: status, review_note: note || '' }).eq('trip_id', tripId)); },
+      async accessRequests() { return withUsernames(ok(await sb.from('access_requests').select('*').order('created_at', { ascending: false }).limit(200))); },
+      async decideAccess(id, approve) { ok(await sb.rpc('decide_access', { p_id: id, p_approve: !!approve })); },
+      async feedback() { return ok(await sb.from('feedback').select('*').order('created_at', { ascending: false }).limit(1000)); },
+      async setFeedbackStatus(id, status) { ok(await sb.from('feedback').update({ status }).eq('id', id)); },
       async deleteSighting(id) { ok(await sb.from('sightings').delete().eq('id', id)); },
       async deleteTrip(id) { ok(await sb.from('trips').delete().eq('id', id)); },
       async trips() { return withUsernames(ok(await sb.from('trips').select('*, sightings(*)').order('started_at', { ascending: false }).limit(2000))); },
@@ -527,6 +644,7 @@
   window.HW = {
     C, SEED, DEMO, sb, IUCN, VENOM, TOXIC, CENTROIDS,
     api: DEMO ? demoApi : sbApi,
-    util: { uid, esc, rupees, lsGet, lsSet, haversineKm, trackKm, nearestRegion, coarsen, computeStats, quoteFrom, processPhoto, toCSV, download, silhouette },
+    net, isNetError,
+    util: { durSet, durGet, storageWorks, isStandalone, isInAppBrowser, uid, esc, rupees, lsGet, lsSet, haversineKm, trackKm, nearestRegion, coarsen, computeStats, quoteFrom, processPhoto, toCSV, download, silhouette },
   };
 })();

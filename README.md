@@ -46,6 +46,32 @@ Each chart has a table view, and the page prints to an A4 PDF.
 
 **Privacy for threatened species.** Public maps round locations to about 1 km, or about 10 km for species flagged *sensitive* (traded or threatened). Exact points are visible only to the observer and to reviewers.
 
+## Accounts and dashboard access
+
+One e-mail and password works for the field app, the Road-kill Logger and the dashboard.
+
+- **First admin:** on a new project, the first person with a confirmed e-mail who opens the dashboard sees **Become the first admin**. The button works once only; it disappears as soon as an admin exists.
+- **Sign-up role:** the dashboard sign-up asks what you want to do: *Record sightings*, *Review records* or *Run the project*. Reviewer and admin are **requests**.
+- **Access requests:** signed-in users without access can send one from the access screen. Admins approve or decline under **Users → Access requests**. Every role change is written to the audit log.
+- **Forgot password:** the reset e-mail brings you back to a **Set a new password** screen, in both the app and the dashboard.
+- **E-mail limits:** Supabase's built-in mailer sends only a few e-mails per hour, and only to the project team. For real users, add your own SMTP server under Authentication → Emails → SMTP, or turn off "Confirm email".
+
+## Working in the field (offline)
+
+These patterns come from the Island Explorer driver app.
+
+- **Three copies:** open checklists, open road surveys and unsynced records are kept in localStorage, IndexedDB *and* the Cache API. If a phone clears one of them, the data is restored from the others.
+- **Offline start:** the app opens and records with no signal. Signed-out users can tap **Record offline now**; their records upload to the account they sign in with later.
+- **Connectivity:** it is judged by real requests, not `navigator.onLine`. Requests time out after 15 seconds, and the queue retries every minute.
+- **Sign-in screen warnings:** it says when the app was opened inside WhatsApp, Instagram or another in-app browser, or when the browser blocks storage.
+
+## More apps and pages
+
+- **Road-kill Logger** (`roadkill.html`, `roadkill-manifest.json`): a separately installable app for survey teams that opens straight into a road survey.
+- **HerpWatch Console:** the dashboard is installable too (its own manifest and icon, plus an "Install console" button in the sidebar).
+- **Feedback** (`feedback.html`): star ratings for the guide, identification help, recording and overall, plus "report a mistake in a species page". It is linked from the app, from every species page and from the website. Admins read it under **Dashboard → Feedback**.
+- **Reject with a reason:** reviewers pick or type a reason, and the observer sees it next to the record in *My recent checklists*.
+
 ## Install as an app
 
 The website and the field app have **Install app** buttons (`install.js`). On Android and desktop Chrome/Edge they open the browser's install prompt; on iPhone/iPad they show the *Share → Add to Home Screen* steps. Once installed, HerpWatch opens full-screen from the home screen, works offline, and has shortcuts to *New checklist* and *Road-kill survey*. Icons are in `assets/` (`icon-192.png`, `icon-512.png`, maskable, Apple touch).

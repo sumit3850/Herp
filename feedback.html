@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HerpWatch Feedback</title>
+<meta name="description" content="Rate HerpWatch or report a mistake in a species page.">
+<meta name="theme-color" content="#1f5b3c">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+.hero{background:url(assets/hero-herp.svg) center/cover;color:#fff;padding:40px 20px 64px;text-align:center}
+.hero img{width:52px;height:52px;border-radius:14px;box-shadow:0 0 0 1px rgba(255,255,255,.25)}
+.hero h1{font-size:clamp(26px,5vw,34px);font-weight:650;letter-spacing:-.03em;margin-top:12px}
+.hero p{opacity:.85;margin-top:6px;font-size:14.5px}
+.wrap{max-width:580px;margin:-38px auto 40px;padding:0 16px}
+.q{padding:14px 0;border-bottom:1px solid var(--line-soft)}
+.q:last-of-type{border-bottom:0}
+.q .lab{font-weight:650;font-size:15px}.q .hint{font-size:12.5px;color:var(--ink-soft);margin:1px 0 8px}
+.stars{display:flex;gap:4px}
+.stars button{width:40px;height:40px;display:grid;place-items:center;border-radius:10px;color:var(--line);transition:transform .1s,color .1s}
+.stars button svg{width:28px;height:28px}
+.stars button.on{color:var(--amber)}
+.stars button:hover{transform:scale(1.12)}
+.stars button:focus-visible{outline:2px solid var(--forest-2)}
+.err{display:none;background:var(--red-soft);color:var(--red);border-radius:10px;padding:10px 12px;font-size:13.5px;margin-top:12px}
+.done{display:none;text-align:center;padding:30px 8px}
+.done .ok{width:56px;height:56px;border-radius:50%;margin:0 auto 10px;display:grid;place-items:center;background:var(--forest-soft);color:var(--forest-2)}
+.done .ok svg{width:28px;height:28px}
+.foot{text-align:center;color:var(--ink-soft);font-size:12.5px;padding:0 16px 40px}
+</style>
+</head>
+<body>
+<header class="hero">
+  <img src="assets/icon-192.png" alt="">
+  <h1>How is HerpWatch working for you?</h1>
+  <p>A few quick taps help us improve the field guide, the identification help and the recording tools.</p>
+</header>
+<main class="wrap"><div class="card pad">
+  <form id="form" novalidate>
+    <div class="q"><div class="lab">Field guide</div><div class="hint">Species pages, photos, distribution and safety notes</div><div class="stars" data-k="r_guide" role="radiogroup" aria-label="Field guide rating"></div></div>
+    <div class="q"><div class="lab">Identification help</div><div class="hint">Did the Identify questions lead you to the right species?</div><div class="stars" data-k="r_identify" role="radiogroup" aria-label="Identification rating"></div></div>
+    <div class="q"><div class="lab">Recording</div><div class="hint">Checklists, road-kill logger, GPS and offline use</div><div class="stars" data-k="r_recording" role="radiogroup" aria-label="Recording rating"></div></div>
+    <div class="q"><div class="lab">Overall *</div><div class="hint">The whole app, start to finish</div><div class="stars" data-k="r_overall" role="radiogroup" aria-label="Overall rating"></div></div>
+    <div class="q"><div class="lab">Report a mistake in a species page <span class="muted" style="font-weight:400">(optional)</span></div>
+      <div class="hint">Wrong IUCN status, venom information, range, photo credit…</div>
+      <select id="species"><option value="">No species, general feedback</option></select>
+      <textarea id="correction" placeholder="What’s wrong, and the correct information (with a source if you have one)" style="margin-top:8px" maxlength="1000"></textarea></div>
+    <div class="q"><div class="lab">Anything else? <span class="muted" style="font-weight:400">(optional)</span></div>
+      <textarea id="comment" placeholder="A feature you need, something that confused you, a species we should add…" maxlength="1500"></textarea></div>
+    <div class="q grid2"><div><label class="f" for="name">Your name (optional)</label><input id="name" autocomplete="name" maxlength="120"></div>
+      <div><label class="f" for="email">E-mail, if you’d like a reply</label><input id="email" type="email" autocomplete="email" maxlength="200"></div></div>
+    <button class="btn btn-primary btn-block" id="send" style="margin-top:14px;min-height:50px">Send feedback</button>
+    <div class="err" id="err" role="alert"></div>
+  </form>
+  <div class="done" id="done"><div class="ok" data-ic="check"></div><h2 style="font-weight:650;letter-spacing:-.02em">Thank you!</h2><p class="muted" style="margin-top:6px">Your feedback reached the HerpWatch team. Corrections are checked by a reviewer before the species page is updated.</p>
+    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn btn-ghost" href="app.html">Back to the app</a></div></div>
+</div></main>
+<div class="foot" id="foot"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="assets/icons.js"></script>
+<script src="config.js"></script>
+<script src="data/seed.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const STAR = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l2.94 5.96 6.58.96-4.76 4.64 1.12 6.55L12 17.52l-5.88 3.09 1.12-6.55L2.48 9.42l6.58-.96z"/></svg>';
+const ratings = {};
+document.querySelectorAll('.stars').forEach((w) => {
+  const k = w.dataset.k;
+  for (let n = 1; n <= 5; n++) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.innerHTML = STAR; b.setAttribute('role', 'radio'); b.setAttribute('aria-label', n + ' star' + (n > 1 ? 's' : ''));
+    b.onclick = () => { ratings[k] = n; [...w.children].forEach((c, i) => { c.classList.toggle('on', i < n); c.setAttribute('aria-checked', i === n - 1); }); };
+    w.appendChild(b);
+  }
+});
+document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = HWI(el.dataset.ic)));
+try { const t = JSON.parse(localStorage.getItem('hw_theme') || '""'); if (t) document.documentElement.setAttribute('data-theme', t); } catch {}
+$('foot').textContent = `${HW.C.APP_NAME} · ${HW.C.SUPPORT_EMAIL}`;
+
+(async () => {
+  const want = new URLSearchParams(location.search).get('species') || '';
+  let list = [];
+  try { list = await HW.api.speciesIndex(); } catch { list = HW.SEED.SPECIES; }
+  list.sort((a, b) => a.common.localeCompare(b.common));
+  $('species').innerHTML += list.map((s) => `<option value="${HW.util.esc(s.id)}">${HW.util.esc(s.common)} (${HW.util.esc(s.sci)})</option>`).join('');
+  if (want) { $('species').value = want; $('correction').focus(); }
+})();
+
+$('form').onsubmit = async (e) => {
+  e.preventDefault();
+  const err = $('err'); err.style.display = 'none';
+  if (!ratings.r_overall) { err.textContent = 'Please give an overall rating (the fourth row of stars).'; err.style.display = 'block'; return; }
+  if ($('species').value && !$('correction').value.trim()) { err.textContent = 'Please describe the mistake on the species page.'; err.style.display = 'block'; return; }
+  const btn = $('send'); btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await HW.api.submitFeedback({
+      ...ratings, name: $('name').value.trim(), email: $('email').value.trim(),
+      species_id: $('species').value || null, correction: $('correction').value.trim(), comment: $('comment').value.trim(),
+      page: document.referrer ? new URL(document.referrer).pathname.split('/').pop() : 'direct',
+    });
+    $('form').style.display = 'none'; $('done').style.display = 'block';
+  } catch (er) {
+    btn.disabled = false; btn.textContent = 'Send feedback';
+    err.textContent = (HW.isNetError(er) ? 'No connection right now. ' : 'Could not send: ' + er.message + '. ') + 'Please try again.'; err.style.display = 'block';
+  }
+};
+</script>
+</body>
+</html>

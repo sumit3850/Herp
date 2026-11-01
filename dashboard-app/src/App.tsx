@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Moon, ShieldAlert, Sun } from "lucide-react";
+import { Crown, Hourglass, Moon, RefreshCw, Send, ShieldAlert, Sun } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -8,14 +8,17 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/a
 import { App1Sidebar } from "@/components/ui/app-1-utils/app-1-sidebar";
 import { app1Nav, type NavId } from "@/components/ui/app-1-utils/app-1-data";
 import { AuthScreen } from "@/components/auth/auth-screen";
+import { SetPasswordScreen } from "@/components/auth/set-password";
 import { DataProvider, useData } from "@/lib/store";
 import { initials } from "@/lib/format";
-import type { HWGlobal, Profile } from "@/lib/hw";
+import type { AccessRequest, HWGlobal, Profile } from "@/lib/hw";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/lib/store";
 import { OverviewPage } from "@/pages/overview";
 import { SubmissionsPage } from "@/pages/submissions";
 import { ChecklistsPage } from "@/pages/checklists";
 import { SpeciesPage } from "@/pages/species";
-import { AuditPage, MapPage, PacksPage, ReportsPage, RoadkillPage, UsersPage } from "@/pages/manage";
+import { AuditPage, FeedbackPage, MapPage, PacksPage, ReportsPage, RoadkillPage, UsersPage } from "@/pages/manage";
 
 /* ── theme: system by default, toggle persists ── */
 function useTheme() {
@@ -49,12 +52,14 @@ function useHashRoute() {
 
 export default function App({ hw }: { hw: HWGlobal }) {
   const [me, setMe] = React.useState<Profile | null | undefined>(undefined);
+  const [recovering, setRecovering] = React.useState(() => hw.api.isRecovery());
   const theme = useTheme();
   React.useEffect(() => { hw.api.session().then(setMe).catch(() => setMe(null)); }, [hw]);
 
   if (me === undefined) return <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">Loading…</div>;
   if (!me) return <AuthScreen hw={hw} onAuthed={setMe} />;
-  if (me.role !== "admin" && me.role !== "reviewer") return <NoAccess me={me} onSignOut={async () => { await hw.api.signOut(); setMe(null); }} />;
+  if (recovering) return <SetPasswordScreen hw={hw} me={me} onDone={(p) => { setMe(p); setRecovering(false); }} />;
+  if (me.role !== "admin" && me.role !== "reviewer") return <NoAccess me={me} hw={hw} onGranted={setMe} onSignOut={async () => { await hw.api.signOut(); setMe(null); }} />;
   return (
     <DataProvider hw={hw} me={me}>
       <Shell theme={theme} onSignOut={async () => { await hw.api.signOut(); setMe(null); }} />
@@ -109,20 +114,76 @@ function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSig
           {page === "map" && <MapPage />}
           {page === "reports" && <ReportsPage />}
           {page === "audit" && <AuditPage />}
+          {page === "feedback" && <FeedbackPage />}
         </main>
       </SidebarInset>
     </SidebarProvider>
   );
 }
 
-function NoAccess({ me, onSignOut }: { me: Profile; onSignOut: () => void }) {
+function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal; onSignOut: () => void; onGranted: (p: Profile) => void }) {
+  const toast = useToast();
+  const [hasAdmin, setHasAdmin] = React.useState<boolean | null>(null);
+  const [req, setReq] = React.useState<AccessRequest | null>(null);
+  const [role, setRole] = React.useState<"reviewer" | "admin">("reviewer");
+  const [note, setNote] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const load = React.useCallback(async () => {
+    const [h, r] = await Promise.all([hw.api.hasAdmin().catch(() => true), hw.api.myAccessRequest().catch(() => null)]);
+    setHasAdmin(h); setReq(r);
+  }, [hw]);
+  React.useEffect(() => { load(); }, [load]);
+  const recheck = async () => { const p = await hw.api.session(); if (p && (p.role === "admin" || p.role === "reviewer")) onGranted(p); else { await load(); toast("Not approved yet"); } };
   return (
-    <div className="grid min-h-svh place-items-center p-6">
-      <div className="max-w-md space-y-4 text-center">
-        <ShieldAlert className="mx-auto size-10 text-warning" />
-        <h1 className="text-2xl font-semibold">No dashboard access</h1>
-        <p className="text-muted-foreground">You’re signed in as <b>{me.email || "@" + me.username}</b>. This is the same account you use in the field app, but it has the <b>{me.role}</b> role. The dashboard is for reviewers and admins. Ask an admin to change your role, or in Supabase run <code className="rounded bg-muted px-1">update profiles set role='admin' where email='{me.email}';</code></p>
-        <div className="flex justify-center gap-2"><Button asChild><a href="../app.html">Open field app</a></Button><Button variant="outline" onClick={onSignOut}>Sign out</Button></div>
+    <div className="grid min-h-svh place-items-center bg-background p-6">
+      <div className="w-full max-w-lg space-y-5">
+        <div className="space-y-2 text-center">
+          <ShieldAlert className="mx-auto size-10 text-amber-500" />
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard access</h1>
+          <p className="text-muted-foreground">Signed in as <b className="text-foreground">{me.email || "@" + me.username}</b>. This account works in the field app; the dashboard needs the <b>reviewer</b> or <b>admin</b> role.</p>
+        </div>
+
+        {hasAdmin === false && (
+          <div className="rounded-xl border border-primary/40 bg-primary/5 p-5">
+            <h2 className="flex items-center gap-2 font-semibold"><Crown className="size-4 text-primary" /> This project has no admin yet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">If you set up HerpWatch, make this account the admin. This works only once: the option disappears as soon as an admin exists.</p>
+            <Button className="mt-3 w-full" disabled={busy} onClick={async () => {
+              if (!confirm(`Make ${me.email} the admin of this HerpWatch project?`)) return;
+              setBusy(true);
+              try { const p = await hw.api.claimFirstAdmin(); toast("You are now the admin"); onGranted(p); } catch (e) { toast((e as Error).message, "error"); setBusy(false); load(); }
+            }}><Crown /> Become the first admin</Button>
+          </div>
+        )}
+
+        {hasAdmin !== false && req?.status === "pending" && (
+          <div className="rounded-xl border bg-muted/40 p-5">
+            <h2 className="flex items-center gap-2 font-semibold"><Hourglass className="size-4" /> Request sent</h2>
+            <p className="mt-1 text-sm text-muted-foreground">You asked for <b>{req.requested_role}</b> access on {new Date(req.created_at).toLocaleDateString()}. An admin will approve it from the Users page; then tap “Check again”.</p>
+            <div className="mt-3 flex gap-2"><Button onClick={recheck}><RefreshCw /> Check again</Button></div>
+          </div>
+        )}
+
+        {hasAdmin !== false && req?.status !== "pending" && (
+          <div className="rounded-xl border p-5">
+            <h2 className="font-semibold">Request access</h2>
+            {req?.status === "declined" && <p className="mt-1 text-sm text-destructive">Your last request was declined. You can ask again with more detail.</p>}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {([["reviewer", "Reviewer", "Review and accept submissions"], ["admin", "Admin", "Manage checklists, species, users"]] as const).map(([k, t, d]) => (
+                <button key={k} type="button" onClick={() => setRole(k)} className={`rounded-lg border p-3 text-left transition-colors ${role === k ? "border-primary bg-primary/10" : "hover:bg-accent"}`}>
+                  <span className="block font-medium">{t}</span><span className="text-xs text-muted-foreground">{d}</span>
+                </button>
+              ))}
+            </div>
+            <Textarea className="mt-3" rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why do you need it? (e.g. state coordinator for Kerala)" />
+            <Button className="mt-3 w-full" disabled={busy} onClick={async () => {
+              setBusy(true);
+              try { setReq(await hw.api.requestAccess(role, note)); toast("Request sent to the admins"); } catch (e) { toast((e as Error).message, "error"); }
+              setBusy(false);
+            }}><Send /> Send request</Button>
+          </div>
+        )}
+
+        <div className="flex justify-center gap-2"><Button variant="outline" asChild><a href="../app.html">Open field app</a></Button><Button variant="ghost" onClick={onSignOut}>Sign out</Button></div>
       </div>
     </div>
   );

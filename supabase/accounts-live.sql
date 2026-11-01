@@ -130,3 +130,111 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Dashboard access: first-admin bootstrap + role requests
+-- ═══════════════════════════════════════════════════════════════════════════
+create table if not exists public.access_requests (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  requested_role text not null check (requested_role in ('reviewer','admin')),
+  note           text not null default '' check (length(note) <= 500),
+  status         text not null default 'pending' check (status in ('pending','approved','declined')),
+  created_at     timestamptz not null default now(),
+  decided_by     uuid references auth.users(id) on delete set null,
+  decided_at     timestamptz
+);
+create unique index if not exists access_requests_one_pending on public.access_requests(user_id) where status = 'pending';
+alter table public.access_requests enable row level security;
+drop policy if exists "access: own" on public.access_requests;
+create policy "access: own" on public.access_requests for select using (user_id = auth.uid());
+drop policy if exists "access: admin" on public.access_requests;
+create policy "access: admin" on public.access_requests for all using (public.is_admin()) with check (public.is_admin());
+
+-- role changes made by these trusted functions pass the profile guard
+create or replace function public.guard_profile() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and not public.is_admin()
+     and coalesce(current_setting('hw.role_change_ok', true), '') <> 'on'
+     and (new.role is distinct from old.role or new.status is distinct from old.status) then
+    raise exception 'only admins change role or status';
+  end if;
+  return new;
+end $$;
+
+-- is there an admin yet? (lets the dashboard offer "Become the first admin")
+create or replace function public.has_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists(select 1 from public.profiles where role = 'admin');
+$$;
+grant execute on function public.has_admin() to anon, authenticated;
+
+-- the first confirmed account may make itself admin — only while NO admin exists
+create or replace function public.claim_first_admin() returns public.profiles
+language plpgsql security definer set search_path = public as $$
+declare r public.profiles;
+begin
+  if auth.uid() is null then raise exception 'sign in first'; end if;
+  perform pg_advisory_xact_lock(hashtext('hw_claim_first_admin'));
+  if exists (select 1 from public.profiles where role = 'admin') then
+    raise exception 'This project already has an admin. Ask them to give you access.';
+  end if;
+  if not exists (select 1 from auth.users where id = auth.uid() and (email_confirmed_at is not null or confirmed_at is not null)) then
+    raise exception 'Confirm your e-mail address first.';
+  end if;
+  perform public.ensure_profile();
+  perform set_config('hw.role_change_ok', 'on', true);
+  update public.profiles set role = 'admin', status = 'approved' where id = auth.uid() returning * into r;
+  perform set_config('hw.role_change_ok', '', true);
+  return r;
+end $$;
+revoke all on function public.claim_first_admin() from public, anon;
+grant execute on function public.claim_first_admin() to authenticated;
+
+-- ask for reviewer / admin access (one pending request per person)
+create or replace function public.request_access(p_role text, p_note text default '') returns public.access_requests
+language plpgsql security definer set search_path = public as $$
+declare r public.access_requests;
+begin
+  if auth.uid() is null then raise exception 'sign in first'; end if;
+  if p_role not in ('reviewer', 'admin') then raise exception 'unknown role %', p_role; end if;
+  update public.access_requests set requested_role = p_role, note = left(coalesce(p_note, ''), 500), created_at = now()
+   where user_id = auth.uid() and status = 'pending' returning * into r;
+  if r.id is null then
+    insert into public.access_requests (user_id, requested_role, note) values (auth.uid(), p_role, left(coalesce(p_note, ''), 500)) returning * into r;
+  end if;
+  return r;
+end $$;
+revoke all on function public.request_access(text, text) from public, anon;
+grant execute on function public.request_access(text, text) to authenticated;
+
+-- admin approves / declines
+create or replace function public.decide_access(p_id uuid, p_approve boolean) returns public.access_requests
+language plpgsql security definer set search_path = public as $$
+declare r public.access_requests;
+begin
+  if not public.is_admin() then raise exception 'admins only'; end if;
+  update public.access_requests set status = case when p_approve then 'approved' else 'declined' end, decided_by = auth.uid(), decided_at = now()
+   where id = p_id and status = 'pending' returning * into r;
+  if r.id is null then raise exception 'request not found or already decided'; end if;
+  if p_approve then update public.profiles set role = r.requested_role, status = 'approved' where id = r.user_id; end if;
+  return r;
+end $$;
+revoke all on function public.decide_access(uuid, boolean) from public, anon;
+grant execute on function public.decide_access(uuid, boolean) to authenticated;
+
+-- a role chosen on the sign-up form becomes a pending request
+create or replace function public.access_from_signup() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare want text;
+begin
+  select raw_user_meta_data->>'requested_role' into want from auth.users where id = new.id;
+  if want in ('reviewer', 'admin') then
+    insert into public.access_requests (user_id, requested_role, note) values (new.id, want, 'Requested at sign-up') on conflict do nothing;
+  end if;
+  return new;
+exception when others then return new;
+end $$;
+drop trigger if exists access_from_signup on public.profiles;
+create trigger access_from_signup after insert on public.profiles for each row execute function public.access_from_signup();

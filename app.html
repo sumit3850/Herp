@@ -93,6 +93,10 @@ body.authing main{max-width:none;padding:0}
 .glass.pw{position:relative}.glass.pw input{padding-right:48px}
 .eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);opacity:.6;padding:6px;color:var(--ink-soft)}.eye .ic{width:19px;height:19px}
 .linkbtn{color:var(--forest-2);font-size:13.5px;font-weight:600}
+.ctxhint{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.45;border:1px solid var(--line)}
+.ctxhint.warn{background:var(--amber-soft);border-color:color-mix(in srgb,var(--amber) 35%,transparent)}
+.ctxhint.ok{background:var(--forest-soft)}
+.ctxhint .ic{margin-top:2px}
 .auth-note{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--forest-soft);font-size:13.5px}
 .btn.big{min-height:52px;border-radius:16px;font-size:15px}
 .orline{position:relative;text-align:center;margin:10px 0 2px;font-size:13px;color:var(--ink-soft)}
@@ -151,6 +155,7 @@ body.authing main{max-width:none;padding:0}
           <div class="auth-brand ae d1"><img src="assets/icon.svg" alt="" width="40" height="40"><span id="auth-app">HerpWatch</span></div>
           <h1 class="auth-title ae d1" id="auth-title"><span class="thin">Welcome to</span> <b id="auth-name">HerpWatch</b></h1>
           <p class="muted ae d2" id="tagline"></p>
+          <div id="ctxhint" class="ctxhint hidden ae d2"></div>
           <div class="tabs2 ae d3" role="tablist"><button id="t-in" class="on" role="tab">Sign in</button><button id="t-up" role="tab">Create account</button></div>
           <div id="auth-note" class="auth-note hidden" role="status"></div>
           <form id="f-in">
@@ -170,7 +175,9 @@ body.authing main{max-width:none;padding:0}
           </form>
           <div class="orline ae d7"><span>Or continue with</span></div>
           <button type="button" class="btn btn-ghost btn-block big ae d8" id="g-in"><svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>Continue with Google</button>
-          <p class="tiny muted ae d9" style="text-align:center;margin-top:14px">One account for the app and the dashboard. Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
+          <button type="button" class="btn btn-ghost btn-block hidden" id="offline-go" style="margin-top:10px"></button>
+          <p class="tiny muted ae d9" id="diag" style="text-align:center;margin-top:10px"></p>
+          <p class="tiny muted ae d9" style="text-align:center;margin-top:6px">One account for the app and the dashboard. Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
         </div>
       </div>
       <div class="auth-hero" aria-hidden="true">
@@ -311,7 +318,7 @@ async function loadChecklist(region = S.region) {
 // ── live updates: admin edits in the dashboard reach the app without a reload ──
 let liveTimer = null, liveOff = null;
 async function refreshLive() {
-  if (!S.me || !navigator.onLine) return;
+  if (!S.me || S.me.guest || !isOnline()) return;
   const before = JSON.stringify([S.checklist, S.clStatus, S.index.length, S.prices]);
   await loadCatalog();
   await loadChecklist();
@@ -386,27 +393,30 @@ async function suggestRegion(selId) {
 
 // ───────────────────────── outbox / sync (offline-first) ─────────────────────────
 const outbox = () => U.lsGet('hw_outbox', []);
-function queue(kind, payload) { const o = outbox().filter((x) => x.payload.id !== payload.id); o.push({ kind, payload }); U.lsSet('hw_outbox', o); return syncNow(); }
+function queue(kind, payload) { const o = outbox().filter((x) => x.payload.id !== payload.id); o.push({ kind, payload }); U.durSet('hw_outbox', o); return syncNow(); }
 let syncing = false;
 async function syncNow() {
-  if (syncing || !S.me) return paintSync();
+  if (syncing || !S.me || S.me.guest) return paintSync();
   syncing = true;
   let o = outbox();
   for (const item of [...o]) {
-    if (!navigator.onLine) break;
     try {
       item.kind === 'trip' ? await api.saveTrip(item.payload) : await api.saveRoadkill(item.payload);
-      o = o.filter((x) => x !== item); U.lsSet('hw_outbox', o);
-    } catch (e) { console.warn('sync failed', e); toast('Sync failed: ' + e.message); break; }
+      o = o.filter((x) => x !== item); U.durSet('hw_outbox', o);
+    } catch (e) { console.warn('sync failed', e); if (!HW.isNetError(e)) toast('Sync failed: ' + e.message); break; }   // offline: retried automatically
   }
   syncing = false; paintSync();
 }
+// connectivity = outcome of the last real request (navigator.onLine is unreliable on phones)
+const isOnline = () => HW.net.ok && navigator.onLine !== false;
 function paintSync() {
-  const n = outbox().length, on = navigator.onLine;
+  const n = outbox().length, on = isOnline();
   $('syncdot').className = 'dot ' + (!on ? 'off' : n ? 'pending' : '');
-  $('synctxt').textContent = !on ? `offline${n ? ' · ' + n + ' queued' : ''}` : n ? `${n} to sync` : HW.DEMO ? 'demo' : 'synced';
+  $('synctxt').textContent = S.me?.guest ? `${n} saved · sign in to upload` : !on ? `offline${n ? ' · ' + n + ' saved' : ''}` : n ? `${n} to sync` : HW.DEMO ? 'demo' : 'synced';
 }
 addEventListener('online', syncNow); addEventListener('offline', paintSync);
+addEventListener('hw-net', (e) => { paintSync(); if (e.detail) syncNow(); });
+setInterval(() => { if (outbox().length && document.visibilityState === 'visible') syncNow(); }, 60 * 1000);
 
 // ───────────────────────── navigation ─────────────────────────
 function show(v) {
@@ -480,6 +490,7 @@ function openSpecies(id) {
       ${kv('Identification', f.id_notes)}${kv('Size', f.size)}${kv('Habitat', f.habitat)}${kv('Distribution', f.distribution)}
       ${kv('Behaviour & notes', f.behaviour)}${kv('Similar species', f.similar)}
       <div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)} (${esc(s.iucn)})</p></div>
+      <p class="small" style="margin-top:10px"><a href="feedback.html?species=${encodeURIComponent(s.id)}">${I('flag')} Report a mistake on this page</a></p>
       ${regions.length ? `<div class="kv"><h4>Recorded in (checklists)</h4><p class="small">${regions.map(esc).join(' · ')}</p></div>` : ''}`
     : `<div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)}</p></div>${unlockOffer(s.pack)}`}
     <div class="row" style="margin-top:16px"><button class="btn btn-primary grow" id="sp-rec">${I('clipboard-list')} Record sighting</button><button class="btn btn-ghost grow" id="sp-rk">${I('route')} Log road-kill</button></div>`);
@@ -569,7 +580,7 @@ function renderIdentify() {
 
 // ═════════════════════════ RECORD — eBird-style checklist ═════════════════════════
 const TRIP = () => U.lsGet('hw_trip', null);
-const saveTripState = (t) => U.lsSet('hw_trip', t);
+const saveTripState = (t) => U.durSet('hw_trip', t);
 const PROTOCOLS = { incidental: 'Incidental (no effort)', stationary: 'Stationary point count', traveling: 'Traveling transect', night_walk: 'Night walk / VES', area: 'Area search' };
 let tripTimer = null, recFilter = '';
 function onTripFix(f) { const t = TRIP(); if (!t) return; if (t.protocol !== 'stationary' && pushTrack(t.track, f)) saveTripState(t); paintTripStats(); }
@@ -618,7 +629,7 @@ function renderRecord() {
   $('r-notes').onchange = (e) => { const t = TRIP(); t.notes = e.target.value; saveTripState(t); };
   $('r-other').onclick = () => otherSheet();
   $('r-map').onclick = () => { const t = TRIP(); openSheet('<h3>Checklist track</h3><div id="tripmap"></div>'); setTimeout(() => drawMap('tripmap', t.track, Object.values(t.items).filter((x) => x.lat).map((x) => ({ lat: x.lat, lng: x.lng, label: x.species_text || byId(x.species_id)?.common }))), 260); };
-  $('r-discard').onclick = () => { if (confirm('Discard this checklist? Nothing will be saved.')) { localStorage.removeItem('hw_trip'); Geo.stop(onTripFix); renderRecord(); } };
+  $('r-discard').onclick = () => { if (confirm('Discard this checklist? Nothing will be saved.')) { U.durSet('hw_trip', null); Geo.stop(onTripFix); renderRecord(); } };
   $('r-submit').onclick = submitTrip;
   el.querySelectorAll('[data-inc]').forEach((b) => (b.onclick = () => bump(b.dataset.inc, +b.dataset.d)));
   el.querySelectorAll('[data-det]').forEach((b) => (b.onclick = () => detailSheet(b.dataset.det)));
@@ -690,7 +701,7 @@ async function submitTrip() {
   const t = TRIP(); const n = Object.values(t.items).filter((x) => x.count > 0).length;
   if (!n && !confirm('No species recorded. Submit an empty checklist?')) return;
   t.complete = t.protocol !== 'incidental' && confirm('Are you reporting ALL species you could detect and identify?\n\nOK = complete checklist · Cancel = only some species');
-  localStorage.removeItem('hw_trip'); Geo.stop(onTripFix); recFilter = '';
+  U.durSet('hw_trip', null); Geo.stop(onTripFix); recFilter = '';
   await queue('trip', tripPayload(t));
   toast(`Checklist saved — ${n} species`); renderRecord();
 }
@@ -700,7 +711,7 @@ async function quickSighting(id) {
   if (TRIP()) { show('record'); bump(id, 1); return toast('Added to your open checklist'); }
   const f = await Geo.once();
   const t = { id: U.uid(), protocol: 'incidental', observers: 1, region_code: S.region, started_at: new Date().toISOString(), track: [], items: {}, notes: '', lat: f?.lat, lng: f?.lng };
-  saveTripState(t); show('record'); detailSheet(id, () => { const t2 = TRIP(); queue('trip', tripPayload(t2)); localStorage.removeItem('hw_trip'); toast('Sighting saved'); renderRecord(); });
+  saveTripState(t); show('record'); detailSheet(id, () => { const t2 = TRIP(); queue('trip', tripPayload(t2)); U.durSet('hw_trip', null); toast('Sighting saved'); renderRecord(); });
 }
 async function loadHistory(elId) {
   const el = $(elId); if (!el) return;
@@ -709,14 +720,22 @@ async function loadHistory(elId) {
   try { [trips, surveys] = await Promise.all([api.myTrips(), api.mySurveys()]); } catch { el.innerHTML = 'Offline — history shows when you reconnect.'; }
   const isRk = elId === 'k-hist';
   const rows = isRk ? surveys.map((s) => `<div class="card pad" style="margin-bottom:8px"><b>${esc(s.road_name || 'Survey')}</b> <span class="small muted">${new Date(s.started_at).toLocaleString()}</span><div class="small">${s.distance_km} km · ${(s.records || []).length} records · ${esc(regionName(s.region_code))}</div></div>`)
-    : trips.map((t) => `<div class="card pad" style="margin-bottom:8px"><b>${esc(PROTOCOLS[t.protocol] || t.protocol)}</b> <span class="small muted">${new Date(t.started_at).toLocaleString()}</span><div class="small">${(t.sightings || []).length} species · ${t.duration_min ?? 0} min · ${t.distance_km ?? 0} km · ${esc(regionName(t.region_code))}${t.complete ? ' · complete' : ''}</div></div>`);
+    : trips.map((t) => {
+        const sg = t.sightings || [], c = (st) => sg.filter((x) => x.review_status === st).length;
+        const rej = sg.filter((x) => x.review_status === 'rejected');
+        return `<div class="card pad" style="margin-bottom:8px"><b>${esc(PROTOCOLS[t.protocol] || t.protocol)}</b> <span class="small muted">${new Date(t.started_at).toLocaleString()}</span>
+          <div class="small">${sg.length} species · ${t.duration_min ?? 0} min · ${t.distance_km ?? 0} km · ${esc(regionName(t.region_code))}${t.complete ? ' · complete' : ''}</div>
+          ${sg.length ? `<div class="pills" style="margin-top:6px">${c('accepted') ? `<span class="pill safe">${I('check')} ${c('accepted')} accepted</span>` : ''}${c('pending') ? `<span class="pill lock">${c('pending')} awaiting review</span>` : ''}${c('rejected') ? `<span class="pill venom">${c('rejected')} not accepted</span>` : ''}</div>` : ''}
+          ${rej.map((x) => `<div class="tiny" style="margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--red-soft)"><b>${esc(byId(x.species_id)?.common || x.species_text || 'Record')}</b>: ${esc(x.review_note || 'not accepted by the reviewer')}</div>`).join('')}
+        </div>`;
+      });
   const queued = pend.filter((p) => p.kind === (isRk ? 'survey' : 'trip')).length;
   el.innerHTML = (queued ? `<p class="small" style="margin-bottom:8px">⏳ ${queued} waiting to sync</p>` : '') + (rows.join('') || '<div class="empty">Nothing yet.</div>');
 }
 
 // ═════════════════════════ ROAD-KILL LOGGER (track + points) ═════════════════════════
 const RK = () => U.lsGet('hw_rk', null);
-const saveRk = (r) => U.lsSet('hw_rk', r);
+const saveRk = (r) => U.durSet('hw_rk', r);
 let rkMap = null, rkLine = null, rkLayer = null, rkMe = null, rkTimer = null;
 function onRkFix(f) {
   const r = RK(); if (!r) return;
@@ -773,12 +792,12 @@ function renderRoadkill() {
   paintRkList(); paintRkStats(); rkTimer = setInterval(paintRkStats, 1000);
   $('k-log').onclick = () => logRoadkill();
   $('k-notes').onchange = (e) => { const r = RK(); r.notes = e.target.value; saveRk(r); };
-  $('k-discard').onclick = () => { if (confirm('Discard this survey and all its records?')) { localStorage.removeItem('hw_rk'); Geo.stop(onRkFix); renderRoadkill(); } };
+  $('k-discard').onclick = () => { if (confirm('Discard this survey and all its records?')) { U.durSet('hw_rk', null); Geo.stop(onRkFix); renderRoadkill(); } };
   $('k-stop').onclick = async () => {
     const r = RK(), km = U.trackKm(r.track);
     if (!confirm(`Finish survey?\n${km.toFixed(2)} km · ${r.records.length} records`)) return;
     const { records, ...sv } = r;
-    localStorage.removeItem('hw_rk'); Geo.stop(onRkFix);
+    U.durSet('hw_rk', null); Geo.stop(onRkFix);
     await queue('survey', { ...sv, ended_at: new Date().toISOString(), distance_km: +km.toFixed(2), records: records.map((x) => ({ ...x, region_code: r.region_code })) });
     toast('Survey saved'); renderRoadkill();
   };
@@ -837,6 +856,15 @@ async function renderMe() {
   const el = $('me'), me = S.me;
   if (!me) return show('auth');
   const ents = S.ents;
+  if (me.guest) {
+    const n = outbox().length + (TRIP() ? 1 : 0) + (RK() ? 1 : 0);
+    el.innerHTML = `<div class="card pad"><h3 class="row" style="gap:8px">${I('cloud-off')} Recording offline</h3>
+      <p class="small muted" style="margin:6px 0 12px">${n} record(s) are saved on this device (in three separate stores, so a browser clean-up won’t lose them). Sign in when you have signal; they upload to your account automatically.</p>
+      <button class="btn btn-primary btn-block" id="m-signin">${I('user')} Sign in to upload</button></div>
+      <a class="card pad row" href="feedback.html" style="margin-top:10px;gap:12px;text-decoration:none;color:inherit">${I('mail')}<span class="grow"><b>Send feedback</b><span class="small muted" style="display:block">Rate the app or report a mistake</span></span>${I('chevron-right')}</a>`;
+    $('m-signin').onclick = () => { show('auth'); paintAuthHints(); };
+    return;
+  }
   el.innerHTML = `<div class="card pad"><div class="row"><div style="width:48px;height:48px;border-radius:50%;background:var(--forest-2);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px">${esc((me.full_name || me.username || '?')[0].toUpperCase())}</div>
       <div class="grow"><b>${esc(me.full_name || me.username)}</b><div class="small muted">@${esc(me.username)} · ${esc(me.email || '')}</div></div>${me.role === 'admin' || me.role === 'reviewer' ? `<a class="btn btn-ghost btn-sm" href="dashboard/">${I('layout-dashboard')} Dashboard</a>` : ''}</div></div>
     <div class="card pad" style="margin-top:10px"><div class="row"><h3 class="grow">My packs</h3><button class="btn btn-primary btn-sm" id="m-store">Buy packs</button></div>
@@ -847,19 +875,25 @@ async function renderMe() {
       <img src="assets/icon-192.png" alt="" width="44" height="44" style="border-radius:11px">
       <div class="grow"><b>Install ${esc(HW.C.APP_NAME)}</b><div class="small muted">Add it to your home screen. Opens full-screen and works offline in the field.</div></div>
       <span class="btn btn-primary btn-sm">${I('download')} Install</span></div>
+    <a class="card pad row" href="feedback.html" style="margin-top:10px;gap:12px;text-decoration:none;color:inherit">${I('mail')}<span class="grow"><b>Send feedback</b><span class="small muted" style="display:block">Rate the app, or report a mistake in a species page</span></span>${I('chevron-right')}</a>
     <div class="card pad" style="margin-top:10px"><h3>Data</h3>
       <p class="small muted" id="m-sync"></p>
       <div class="row wrap" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="m-syncnow">Sync now</button><button class="btn btn-ghost btn-sm" id="m-csv">Export my sightings (CSV)</button><button class="btn btn-ghost btn-sm" id="m-geo">Export road-kill (GeoJSON)</button></div></div>
     <div class="card pad" style="margin-top:10px"><h3>Settings</h3>
       <label class="f">Theme</label><select id="m-theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
       <div class="row wrap" style="margin-top:12px"><a class="btn btn-ghost btn-sm" href="index.html">Website & reports</a><button class="btn btn-ghost btn-sm" id="m-out">Sign out</button>${HW.DEMO ? '<button class="btn btn-ghost btn-sm" id="m-reset">Reset demo data</button>' : ''}</div></div>`;
-  $('m-sync').textContent = `${outbox().length} item(s) waiting to sync · ${navigator.onLine ? 'online' : 'offline'}`;
+  $('m-sync').textContent = `${outbox().length} item(s) waiting to sync · ${isOnline() ? 'online' : 'offline'} · saved on this device in 3 places`;
   $('m-store').onclick = () => openStore();
   window.HWInstall?.update();
   $('m-syncnow').onclick = async () => { await syncNow(); renderMe(); };
   $('m-theme').value = U.lsGet('hw_theme', '');
   $('m-theme').onchange = (e) => { U.lsSet('hw_theme', e.target.value); applyTheme(); };
-  $('m-out').onclick = async () => { await api.signOut(); S.me = null; S.unlocked = {}; S.ents = []; show('auth'); };
+  $('m-out').onclick = async () => {
+    const n = outbox().length;
+    if (n && !confirm(`${n} record(s) have not been uploaded yet. They stay safely on this device and upload after you sign in again. Sign out anyway?`)) return;
+    if (!S.me.guest) await api.signOut();
+    S.me = null; S.unlocked = {}; S.ents = []; show('auth'); paintAuthHints();
+  };
   $('m-reset') && ($('m-reset').onclick = () => { if (confirm('Wipe all demo data in this browser?')) { api.resetDemo(); ['hw_trip', 'hw_rk', 'hw_outbox', 'hw_cat'].forEach((k) => localStorage.removeItem(k)); location.reload(); } });
   $('m-csv').onclick = async () => {
     try { const trips = await api.myTrips(); const rows = trips.flatMap((t) => (t.sightings || []).map((s) => ({ checklist: t.id, protocol: t.protocol, region: t.region_code, observed_at: s.observed_at, common_name: byId(s.species_id)?.common || s.species_text, scientific_name: byId(s.species_id)?.sci || '', count: s.count, lat: s.lat, lng: s.lng, life_stage: s.life_stage, sex: s.sex, notes: s.notes, review: s.review_status })));
@@ -876,6 +910,40 @@ async function renderMe() {
 // ═════════════════════════ AUTH ═════════════════════════
 $('t-in').onclick = () => { $('t-in').classList.add('on'); $('t-up').classList.remove('on'); $('f-in').classList.remove('hidden'); $('f-up').classList.add('hidden'); };
 $('t-up').onclick = () => { $('t-up').classList.add('on'); $('t-in').classList.remove('on'); $('f-up').classList.remove('hidden'); $('f-in').classList.add('hidden'); };
+// sign-in screen helpers (from the Island Explorer driver app): where am I running, is my data safe here?
+async function paintAuthHints() {
+  const h = $('ctxhint');
+  if (U.isStandalone()) { h.className = 'ctxhint ok ae d2'; h.innerHTML = `${I('badge-check')}<span><b>You’re in the installed app.</b> Sign in once with internet; after that it opens and records with no signal.</span>`; }
+  else if (U.isInAppBrowser()) { h.className = 'ctxhint warn ae d2'; h.innerHTML = `${I('triangle-alert')}<span><b>You opened this inside a chat app’s browser</b> (WhatsApp, Instagram…). Data saved here can be lost. Tap ⋮ → <b>Open in Chrome / Safari</b>, then install the app.</span>`; }
+  else { h.className = 'ctxhint ae d2'; h.innerHTML = `${I('smartphone')}<span>For field work, <button type="button" class="linkbtn" data-install>install the app</button> and open it from your home screen. It keeps working with no signal.</span>`; }
+  const n = outbox().length + (TRIP() ? 1 : 0) + (RK() ? 1 : 0);
+  $('diag').innerHTML = !U.storageWorks() ? `${I('triangle-alert')} This browser is blocking storage (private mode?). Records can’t be kept offline here.`
+    : n ? `${I('shield-check')} ${n} unsynced record(s) are safe on this device and will upload after you sign in.` : '';
+  const off = !isOnline();
+  $('offline-go').classList.toggle('hidden', !(off || n));
+  $('offline-go').innerHTML = `${I('cloud-off')} ${n ? 'Keep recording offline' : 'No signal? Record offline now'}`;
+}
+$('offline-go').onclick = async () => {
+  // record without signing in; everything is queued and uploads under the account you sign in with later
+  S.me = { id: 'guest', username: 'offline', full_name: 'Offline recorder', role: 'user', status: 'approved', guest: true };
+  fillRegionSelect($('region'), S.region); await loadChecklist(); paintSync();
+  show(RK() ? 'roadkill' : 'record'); toast('Recording offline. Sign in from “Me” when you have signal to upload.', 5000);
+};
+// opened from a "reset password" e-mail → choose a new password
+function askNewPassword() {
+  openSheet(`<h3 class="row" style="gap:8px">${I('lock')} Set a new password</h3>
+    <p class="small muted" style="margin:4px 0 10px">For ${esc(S.me?.email || 'your account')}. It works for the app and the dashboard.</p>
+    <label class="f" for="np1">New password</label><input id="np1" type="password" minlength="6" autocomplete="new-password">
+    <label class="f" for="np2">Repeat it</label><input id="np2" type="password" minlength="6" autocomplete="new-password">
+    <button class="btn btn-primary btn-block" id="np-save" style="margin-top:14px">Save new password</button>`);
+  $('np1').focus();
+  $('np-save').onclick = async () => {
+    if ($('np1').value !== $('np2').value) return toast('The two passwords don’t match');
+    $('np-save').disabled = true;
+    try { await api.updatePassword($('np1').value); closeSheet(); toast('Password changed. You’re signed in.', 5000); }
+    catch (er) { $('np-save').disabled = false; toast(er.message, 5000); }
+  };
+}
 function authNote(html) { const n = $('auth-note'); n.innerHTML = html; n.classList.toggle('hidden', !html); }
 function offerResend(email) {
   authNote(`${I('mail')}<span>Didn’t get the e-mail? <button type="button" class="linkbtn" id="resend">Send it again</button></span>`);
@@ -886,7 +954,7 @@ $('f-in').onsubmit = async (e) => {
   e.preventDefault(); authNote('');
   const email = $('in-email').value.trim();
   try { S.me = await api.signIn(email, $('in-pw').value); await afterLogin(); }
-  catch (er) { toast(er.message, 5000); if (er.code === 'email_not_confirmed') offerResend(email); }
+  catch (er) { toast(HW.isNetError(er) ? 'No connection. You can still record offline; sign in later to upload.' : er.message, 5000); if (er.code === 'email_not_confirmed') offerResend(email); paintAuthHints(); }
 };
 $('f-up').onsubmit = async (e) => {
   e.preventDefault();
@@ -899,7 +967,12 @@ $('f-up').onsubmit = async (e) => {
 };
 $('g-in').onclick = async () => { try { await api.signInWithGoogle(location.href.split('#')[0]); } catch (er) { toast(er.message, 4000); } };
 document.querySelectorAll('[data-eye]').forEach((b) => (b.onclick = () => { const i = $(b.dataset.eye); i.type = i.type === 'password' ? 'text' : 'password'; b.style.opacity = i.type === 'text' ? 1 : .6; }));
-$('forgot').onclick = async () => { const em = $('in-email').value.trim(); if (!em.includes('@')) return toast('Type your email first'); try { await api.resetPassword(em); toast('Reset link sent to ' + em); } catch (er) { toast(er.message); } };
+$('forgot').onclick = async () => {
+  const em = $('in-email').value.trim();
+  if (!em.includes('@')) { $('in-email').focus(); return toast('Type your e-mail address above first, then tap Reset password.'); }
+  try { await api.resetPassword(em); authNote(`${I('mail')}<span>If <b>${esc(em)}</b> has an account, a reset link is on its way. Open it on this device; it brings you back here to choose a new password. Check spam too.</span>`); }
+  catch (er) { toast(er.message, 7000); authNote(`${I('triangle-alert')}<span>${esc(er.message)}</span>`); }
+};
 async function afterLogin() {
   if (S.me?.home_region && !localStorage.getItem('hw_region')) { S.region = S.me.home_region; U.lsSet('hw_region', S.region); }
   fillRegionSelect($('region'), S.region);
@@ -916,12 +989,19 @@ function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.document
   document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = I(el.dataset.ic)));
   document.querySelectorAll('.iconbtn[data-install]').forEach((el) => (el.innerHTML = I('download')));
   if (HW.DEMO) { $('demo').classList.remove('hidden'); document.body.style.setProperty('--topoff', $('demo').offsetHeight + 'px'); }
+  await Promise.all(['hw_trip', 'hw_rk', 'hw_outbox'].map((k) => U.durGet(k)));   // re-seed localStorage if the browser cleared it
   await loadCatalog();
   fillRegionSelect($('region'), S.region); fillRegionSelect($('up-region'), S.region);
   try { S.me = await api.session(); } catch { S.me = null; }
-  if (!S.me) { paintSync(); return show('auth'); }
+  const linkErr = api.linkError();
+  if (!S.me) {
+    paintSync(); paintAuthHints(); show('auth');
+    if (linkErr) { authNote(`${I('triangle-alert')}<span>${esc(linkErr)}</span>`); toast(linkErr, 7000); }
+    return;
+  }
+  if (api.isRecovery()) { await afterLogin(); return askNewPassword(); }
   await afterLogin();
-  const h = location.hash.slice(1);
+  const h = new URLSearchParams(location.search).get('app') === 'roadkill' ? 'roadkill' : location.hash.slice(1);
   if (TRIP()) show('record'); else if (RK()) show('roadkill'); else if (['guide', 'identify', 'record', 'roadkill', 'me'].includes(h)) show(h);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

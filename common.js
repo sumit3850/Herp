@@ -104,6 +104,9 @@
   /** Works offline: nearest state / district / island centre from the region list (lat/lng in the regions table).
    *  District and island are only suggested when they are close and inside the chosen state. */
   function locateRegions(regions, lat, lng) {
+    regions = regions.map((r) => (r.kind ? r : { ...r, kind: inferKind(r) }));
+    const seedPos = Object.fromEntries((SEED.REGIONS || []).map((x) => [x.code, x]));
+    regions = regions.map((r) => (r.lat != null ? r : { ...r, lat: seedPos[r.code]?.lat ?? null, lng: seedPos[r.code]?.lng ?? null }));
     const near = (list, maxKm) => { let best = null, bd = maxKm; for (const r of list) { if (r.lat == null) continue; const d = haversineKm([lat, lng], [+r.lat, +r.lng]); if (d < bd) { bd = d; best = r; } } return best; };
     const country = near(regions.filter((r) => r.kind === 'country'), 3000);
     const state = near(regions.filter((r) => r.kind === 'state' || r.kind === 'ut'), 700);
@@ -123,6 +126,8 @@
     } catch { return ''; }
   }
 
+  /** region type from its code when the database doesn't say: IN = country, IN-KL = state, longer = district / island */
+  const inferKind = (r) => (!r.parent ? 'country' : r.code.split('-').length === 2 ? 'state' : /-I-/.test(r.code) ? 'island' : 'district');
   // ───────── durable storage (localStorage + IndexedDB + Cache API) ─────────
   function idb(store = 'kv') {
     return new Promise((res) => {
@@ -304,11 +309,29 @@
 
     // ── catalogue ──
     async packs() { need(); return ok(await sb.from('packs').select('*').order('sort')); },
-    async regions() { need(); return ok(await sb.from('regions').select('*').order('sort').order('code')); },
+    /** regions, with kind / centre filled in from the built-in list when the database is older (no kind, lat, lng columns) */
+    async regions() {
+      need();
+      let r = await sb.from('regions').select('*').order('sort').order('code');
+      if (r.error) r = await sb.from('regions').select('*').order('code');
+      const rows = ok(r), seed = Object.fromEntries((SEED.REGIONS || []).map((x) => [x.code, x]));
+      return rows.map((x) => ({ ...x, kind: x.kind || seed[x.code]?.kind || inferKind(x), lat: x.lat ?? seed[x.code]?.lat ?? null, lng: x.lng ?? seed[x.code]?.lng ?? null }));
+    },
+    /** which database version is installed (for a clear "update needed" message instead of broken screens) */
+    async dbVersion() {
+      need();
+      const t = async (q) => !(await q).error;
+      if (await t(sb.from('species_media').select('id').limit(0))) return 5;
+      if (await t(sb.from('platform_settings').select('key').limit(0))) return 4;
+      if (await t(sb.from('feedback').select('id').limit(0))) return 3;
+      return 2;
+    },
     async prices() { need(); return ok(await sb.from('pack_prices').select('id,pack:pack_id,region:region_code,paise,days,active').eq('active', true)); },
     async settings() { need(); const rows = ok(await sb.from('platform_settings').select('key,value')); return Object.fromEntries(rows.map((r) => [r.key, r.value])); },
     async speciesIndex() { need(); return ok(await sb.from('species_index').select('*')).map(fromRow); },
     async speciesFull(id) { need(); return fromRow(ok(await sb.from('species_full').select('*').eq('id', id).maybeSingle())); },
+    /** free preview: the first 3 species of each group in a region (full pages) */
+    async speciesPreview(region) { need(); return ok(await sb.rpc('species_preview', { p_region: region })).map(fromRow); },
     async unlockedSpecies() { need(); return ok(await sb.from('species_full').select('*')).map(fromRow); },
     async checklist(region) { need(); return ok(await sb.from('checklist').select('species_id').eq('region_code', region)).map((r) => r.species_id); },
     async checklistEntries(region) { need(); return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },

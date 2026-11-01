@@ -133,6 +133,8 @@ begin
     r := r || jsonb_build_object('a','3 field user','t','can log a road-kill survey with records','ok', n = 1,'d', '');
     select count(*) into n from public.species_full;
     r := r || jsonb_build_object('a','3 field user','t','no paid content before buying a pack','ok', n = 0,'d', n || ' visible');
+    select count(*), count(distinct coalesce(nullif(p.taxon_group, ''), p.pack_id)) into n, n2 from public.species_preview(g_region) p;
+    r := r || jsonb_build_object('a','3 field user','t','free preview: first 3 species of each group in a region','ok', n > 0 and n <= 3 * n2,'d', n || ' species in ' || n2 || ' groups');
     begin
       insert into public.entitlements (user_id, pack_id, region_code) values (F, g_pack, 'IN');
       r := r || jsonb_build_object('a','3 field user','t','cannot give themselves a pack','ok', false,'d', 'insert succeeded');
@@ -378,7 +380,7 @@ begin
     perform set_config('request.jwt.claims', claims_anon, true); perform set_config('request.jwt.claim.sub', '', true);
     set local role anon;
     select count(*) filter (where kind = 'paper'), count(*) filter (where kind = 'image') into n, n2 from public.species_media where species_id = any_sp and url like 'https://%example.org%' or (species_id = any_sp and url like 'https://doi.org/10.0000/test');
-    r := r || jsonb_build_object('a','11 media','t','research papers are public; photos follow the pack rules','ok', n = 1 and n2 = 0,'d', n || ' paper, ' || n2 || ' photo visible');
+    r := r || jsonb_build_object('a','11 media','t','research papers are public; photos follow the pack rules','ok', n = 1 and n2 = (case when public.in_any_preview(any_sp) then 1 else 0 end),'d', n || ' paper, ' || n2 || ' photo visible (preview species: ' || public.in_any_preview(any_sp) || ')');
     reset role;
     update public.platform_settings set value = 'false' where key = 'require_packs';
     perform set_config('request.jwt.claims', json_build_object('sub', BL, 'role', 'authenticated')::text, true);

@@ -22,7 +22,7 @@ A field recording and species documentation platform for the **reptiles and amph
 
 Five sections, in a clean neutral design (Inter, white cards, orange accent): a top bar on desktop and a bottom bar on phones (no sidebar). **Home · Record · Explore · My records · Settings.**
 
-- **Home.** *Start a herping session* (or the running session with its timer), *Add a single observation*, three key numbers (species, observations, sessions), an activity chart for the last 12 months and your recent records.
+- **Home.** *Start a herping session* (or the running session with its timer), *Add a single observation*, **Download your state’s checklist** for offline use (the state with all its district and island lists, species pages, photos and calls), three key numbers (species, observations, sessions), an activity chart for the last 12 months and your recent records.
 - **Record (herping session).** Pick the survey type: *Day herping, Night herping, Road survey, Transect, Habitat survey, Opportunistic, Creek & mangrove, Stream & wetland*. Date and start time (adjustable), GPS position, accuracy, elevation, place name, state, district and island are captured automatically, and a **Record GPS track** switch records the route. While recording, the screen shows the timer, distance and place, a **Likely species** list (species recorded within 10 km, or the island/district/state checklist when offline) with a one-tap **+** (each tap adds one individual with its own time and GPS point), a search box to add any species or an unidentified animal, and a bar with filters, notes, recorded species and **Stop**. Stop asks “Are you done herping?”; *Stop track* opens a review page (date, location or *Choose location*, survey type, observers, minutes, distance, complete list yes/no, weather, comments, the species list) where you can go back to recording or **Submit**. The session survives app restarts and flat batteries.
 - **Observations.** Each keeps its own timestamp and GPS point. Fields: species (with family, genus and order shown) or free text for unidentified animals, ID confidence, evidence (direct sighting, shed skin, eggs, tracks, call, remains, photo only), count, life stage (egg, hatchling, tadpole, juvenile, subadult, adult, unknown), sex, condition (alive, road-kill, other mortality), wild or captive, habitat, microhabitat, behaviour, activity, weather, temperature, notes, several photos (with view labels and metadata) and privacy (public, restricted, private). Animals never need to be handled; the form says so.
 - **Species pages** (from Explore, Checklist or My records): full-width photo gallery with credits, name, description, a play button for calls, videos (uploaded or YouTube), safety notes, a **distribution map** (checklist regions plus public records), habitat and conservation, and **research papers** with DOI links.
@@ -38,6 +38,10 @@ Statuses: **Pending review · Verified · Needs identification · More informati
 
 - *Public*: on the public map. *Restricted*: counted in statistics, exact point hidden from the public. *Private*: only the observer and reviewers.
 - **Sensitive species** are always blurred on public maps (precision set by the Admin, default ~10 km), whatever the observer chooses.
+
+### GPS accuracy
+
+The app asks for high-accuracy GPS with no cached positions. A session starts with the best fix it can get within 8 s (aiming for ±20 m); each observation waits up to 4 s for ±10 m and keeps improving its position while the form is open (unless you set it by hand). The recording bar shows the live accuracy: green ≤ 10 m, amber ≤ 30 m, red above.
 
 ### Offline
 
@@ -123,7 +127,7 @@ dashboard/       its committed production build (served at /dashboard/)
 sw.js            offline cache (app shell + map tiles)
 supabase/schema.sql                       tables, RLS, views, RPCs, storage buckets
 supabase/seed.sql                         generated: node scripts/build-seed.mjs
-supabase/tests/selftest.sql               86 checks with simulated users (rolled back)
+supabase/tests/selftest.sql               87 checks with simulated users (rolled back)
 tests/local-supabase/                     a small local stand-in for Supabase used for end-to-end tests
 supabase/functions/create-order           prices the cart server-side, creates the Razorpay order
 supabase/functions/razorpay-webhook       verifies the payment, writes entitlements
@@ -144,7 +148,7 @@ The end-to-end tests use a local Postgres and `tests/local-supabase/server.mjs`,
   3. Actions → **Supabase setup (database + backend)** → Run workflow.
 - **Option B, SQL Editor:** open `supabase/setup.sql` (schema + catalogue in one file), paste it into Supabase → SQL Editor, and Run.
 
-**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs 86 checks with simulated users: accounts, the sole-Admin rule, sessions, track points, photos, privacy, the review workflow (original ID kept, history, verified records protected), reviewer proposals, purchases and live updates. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
+**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs 87 checks with simulated users: accounts, the sole-Admin rule, sessions, track points, photos, privacy, the review workflow (original ID kept, history, verified records protected), reviewer proposals, purchases and live updates. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
 
 **2. Auth settings.** In Supabase → Authentication:
 - **URL Configuration → Site URL:** `https://sumit3850.github.io/Herp/app.html`.

@@ -24,6 +24,7 @@ const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');
 const fmtDate = (t) => new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 const fmtTime = (t) => new Date(t).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 const fmtDT = (t) => `${fmtDate(t)}, ${fmtTime(t)}`;
+const mmss = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; };
 const hms = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 const nameMode = () => U.lsGet('hw_names', 'common');          // common | sci | both
 const nm = (s) => (!s ? '' : nameMode() === 'sci' ? s.sci : nameMode() === 'both' ? `${s.common} (${s.sci})` : s.common);
@@ -80,14 +81,19 @@ const obsInRegion = (o, code) => { const d = descendants(code); return [o.region
 async function loadCatalog() {
   const cache = U.lsGet('hw_cat', null);
   if (cache) Object.assign(S, { packs: cache.packs, regions: cache.regions, prices: cache.prices, index: cache.index, settings: cache.settings || {} });
-  try {
-    const [packs, regions, prices, index, settings] = await Promise.all([api.packs(), api.regions(), api.prices(), api.speciesIndex(), api.settings().catch(() => ({}))]);
-    Object.assign(S, { packs, regions, prices, index, settings });
-    U.lsSet('hw_cat', { packs, regions, prices, index, settings }); U.lsSet('hw_cat_at', new Date().toISOString());
-  } catch (e) {
-    if (!cache) { S.regions = HW.SEED.REGIONS || []; S.packs = HW.SEED.PACKS || []; S.index = (HW.SEED.SPECIES || []).map((s) => ({ ...s })); }
-    if (e.code === 'db_update_needed') toast(e.message, 8000);
-  }
+  // each part loads on its own, so one missing table (older database) doesn't blank the whole app
+  const [packs, regions, prices, index, settings] = await Promise.all([
+    api.packs().catch(() => null), api.regions().catch(() => null), api.prices().catch(() => null), api.speciesIndex().catch(() => null), api.settings().catch(() => null)]);
+  if (packs?.length) S.packs = packs; else if (!S.packs?.length) S.packs = HW.SEED.PACKS || [];
+  if (regions?.length) S.regions = regions; else if (!S.regions?.length) S.regions = HW.SEED.REGIONS || [];
+  if (prices) S.prices = prices;
+  if (index?.length) S.index = index; else if (!S.index?.length) S.index = (HW.SEED.SPECIES || []).map((x) => ({ ...x }));
+  if (settings) S.settings = settings;
+  // repair a cached region list from an older version (no type / centre)
+  S.regions = S.regions.map((r) => ({ ...r, kind: r.kind || (HW.SEED.REGIONS || []).find((x) => x.code === r.code)?.kind || (!r.parent ? 'country' : r.code.split('-').length === 2 ? 'state' : 'district'),
+    lat: r.lat ?? (HW.SEED.REGIONS || []).find((x) => x.code === r.code)?.lat ?? null, lng: r.lng ?? (HW.SEED.REGIONS || []).find((x) => x.code === r.code)?.lng ?? null }));
+  if (packs || regions || index) { U.lsSet('hw_cat', { packs: S.packs, regions: S.regions, prices: S.prices, index: S.index, settings: S.settings }); U.lsSet('hw_cat_at', new Date().toISOString()); }
+  if (isOnline() && S.me && !S.me.guest && S.dbv == null) api.dbVersion().then((v) => { S.dbv = v; if (v < 5 && S.view === 'home') renderHome(); }).catch(() => {});
 }
 async function loadUser() {
   const k = S.me?.id || '';
@@ -96,7 +102,8 @@ async function loadUser() {
   if (!S.me || S.me.guest) return;
   try {
     const [ents, full] = await Promise.all([api.myEntitlements(), api.unlockedSpecies()]);
-    S.ents = ents; S.unlocked = Object.fromEntries(full.map((s) => [s.id, s]));
+    const keepPreview = Object.fromEntries(Object.entries(S.unlocked).filter(([, v]) => v._preview));
+    S.ents = ents; S.unlocked = { ...keepPreview, ...Object.fromEntries(full.map((s) => [s.id, s])) };
     U.lsSet('hw_unlocked_' + k, S.unlocked); U.lsSet('hw_ents_' + k, S.ents);
   } catch (e) { console.warn(e); }
 }
@@ -108,6 +115,17 @@ async function loadChecklist(region = S.region) {
     const ids = rows.map((r) => r.species_id), st = Object.fromEntries(rows.map((r) => [r.species_id, r.status]));
     U.lsSet(key, ids); U.lsSet(skey, st);
     if (region === S.region) { S.checklist = ids; S.clStatus = st; }
+  } catch {}
+  await loadPreview(region);
+}
+/** free preview pages (first 3 of each group in this region) are kept with the unlocked pages, so they work offline too */
+async function loadPreview(region) {
+  if (!S.me || S.me.guest || !isOnline()) return;
+  try {
+    const rows = await api.speciesPreview(region);
+    S.preview = { ...(S.preview || {}), [region]: rows.map((r) => r.id) };
+    for (const r of rows) if (!S.unlocked[r.id]) S.unlocked[r.id] = { ...r, _preview: true };
+    U.lsSet('hw_unlocked_' + S.me.id, S.unlocked); U.lsSet('hw_preview', S.preview);
   } catch {}
 }
 /** my observations + sessions from the server, cached; local unsynced items are merged in on display */
@@ -143,13 +161,25 @@ const Geo = {
     if (fn) this.subs.add(fn);
     if (this.wid != null || !navigator.geolocation) return;
     this.wid = navigator.geolocation.watchPosition((p) => { this.err = ''; this.last = fixOf(p); this.subs.forEach((f) => f(this.last)); },
-      (e) => { this.err = e.message; this.subs.forEach((f) => f(null)); }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 });
+      (e) => { this.err = e.message; this.subs.forEach((f) => f(null)); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
     this.wake();
   },
   stop(fn) {
     if (fn) this.subs.delete(fn);
     if (this.subs.size || this.wid == null) return;
     navigator.geolocation.clearWatch(this.wid); this.wid = null; this.lock?.release?.(); this.lock = null;
+  },
+  /** the most accurate fix we can get: resolves as soon as one is within `want` metres, else the best one seen before `ms` */
+  best(want = 15, ms = 8000) {
+    return new Promise((res) => {
+      if (!navigator.geolocation) return res(null);
+      let best = this.last && Date.now() - this.last.t < 10000 ? this.last : null;
+      if (best && best.acc <= want) return res(best);
+      const fn = (f) => { if (!f) return; if (!best || f.acc < best.acc) best = f; if (f.acc <= want) done(); };
+      const done = () => { clearTimeout(t); this.stop(fn); res(best); };
+      const t = setTimeout(done, ms);
+      this.start(fn);
+    });
   },
   async wake() { try { this.lock = await navigator.wakeLock?.request('screen'); } catch {} },
   once(maxAge = 20000) {
@@ -314,6 +344,50 @@ function areaChart(vals) {
   return `<svg class="area" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="ag" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#f97316" stop-opacity=".28"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/></linearGradient></defs>
     <path d="M0,${H} L${pts.join(' L')} L${W},${H} Z" fill="url(#ag)"/><polyline points="${pts.join(' ')}" fill="none" stroke="#f97316" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
 }
+// ── offline field guide: download a whole state (checklists incl. districts/islands, species pages, photos, calls) ──
+const DLS = () => U.lsGet('hw_dl', {});
+const homeState = () => { const c = (U.lsGet('hw_dl_pick', null) || S.me?.home_region || S.region || 'IN-AN'); return c.split('-').slice(0, 2).join('-'); };
+async function downloadState(code, onStep = () => {}) {
+  const kids = [...descendants(code)];
+  onStep('Checklists'); for (const c of kids) await loadChecklist(c);
+  onStep('Species pages'); await loadUser(); await loadPreview(code);
+  const ids = U.lsGet('hw_cl_' + code, []) || [];
+  const urls = new Set(); let media = 0;
+  onStep('Photos and calls');
+  for (const id of ids) {
+    const sp = S.unlocked[id]; if (!sp) continue;
+    for (const im of sp.images || []) urls.add(typeof im === 'string' ? im : im.url);
+    try { const m = await api.speciesMedia(id); MEDIA_CACHE[id] = m; U.lsSet('hw_media_' + id, m); for (const x of m) if (x.kind === 'image' || x.kind === 'audio') urls.add(x.url); } catch {}
+  }
+  try {
+    const c = await caches.open('hw-media');
+    let k = 0;
+    for (const u of urls) { if (!u) continue; k++; onStep(`Photos and calls ${k}/${urls.size}`); try { if (!(await c.match(u))) { const r = await fetch(u, { mode: 'cors' }); if (r.ok) { await c.put(u, r); media++; } } else media++; } catch {} }
+  } catch {}
+  const all = DLS(); all[code] = { at: new Date().toISOString(), species: ids.length, open: ids.filter((id) => S.unlocked[id]).length, media, lists: kids.filter((c) => (U.lsGet('hw_cl_' + c, []) || []).length).length };
+  U.lsSet('hw_dl', all);
+  return all[code];
+}
+function dlCard() {
+  const code = homeState(), d = DLS()[code];
+  return `<div class="panel dl"><div class="row" style="align-items:flex-start"><span class="dlic">${I(d ? 'circle-check' : 'download')}</span><div class="grow">
+      <h3>${d ? 'Offline field guide ready' : 'Download your state’s checklist'}</h3>
+      <p class="sub">${d ? `${esc(regionName(code))} · ${d.species} species (${d.open} with full pages) · ${d.lists} lists incl. districts & islands · ${d.media} photos/calls · ${fmtDate(d.at)}` : 'Get the complete species list of a state, with its districts and islands, to use in the field with no signal.'}</p></div></div>
+    <div class="row" style="gap:8px;margin-top:12px"><select id="dl-st" style="flex:1">${regionOptions(code, { kinds: ['state', 'ut'] })}</select>
+      <button class="btn ${d ? 'btn-ghost' : 'btn-primary'}" id="dl-go">${d ? I('refresh-cw') + ' Update' : I('download') + ' Download'}</button></div>
+    <p class="tiny muted" id="dl-msg" style="margin-top:6px"></p></div>`;
+}
+function bindDlCard() {
+  if (!$('dl-go')) return;
+  $('dl-st').onchange = (e) => { U.lsSet('hw_dl_pick', e.target.value); renderHome(); };
+  $('dl-go').onclick = async () => {
+    if (!isOnline()) return toast('Connect to the internet to download');
+    const code = $('dl-st').value; $('dl-go').disabled = true;
+    try { const d = await downloadState(code, (m) => { if ($('dl-msg')) $('dl-msg').textContent = 'Downloading: ' + m + '…'; }); toast(`${regionName(code)}: ${d.species} species ready offline`); S.region = code; U.lsSet('hw_region', code); $('region').innerHTML = regionOptions(code); }
+    catch (e) { toast(e.message); }
+    renderHome();
+  };
+}
 function renderHome() {
   const ses = SES(), st = myStats(), recent = allMyObs().slice(0, 5);
   const pend = outbox().length;
@@ -321,7 +395,9 @@ function renderHome() {
     ${ses ? `<button class="startbtn live" id="h-resume">${I('timer')}<span class="grow"><b>${ses.status === 'paused' ? 'Session paused' : 'Session in progress'}</b><small>${esc(SURVEY_TYPES[ses.survey_type])} · <span id="h-timer">${hms(elapsed(ses))}</span> · ${ses.observations.length} observation${ses.observations.length === 1 ? '' : 's'}</small></span>${I('chevron-right')}</button>`
       : `<button class="startbtn" id="h-start">${I('play')}<span class="grow"><b>Start a herping session</b><small>Timer, GPS track and observations in one record</small></span>${I('chevron-right')}</button>`}
     <button class="subbtn" id="h-quick">${I('plus')}<span class="grow">Add a single observation</span>${I('chevron-right')}</button>
+    ${S.dbv != null && S.dbv < 5 ? `<div class="panel" style="border-color:var(--amber);background:var(--amber-soft);margin:12px 0 0"><h3>${S.me?.role === 'admin' ? 'Update your database' : 'Some features are waiting for an update'}</h3><p class="sub" style="color:var(--ink)">The online database is an older version (v${S.dbv}), so uploads, Explore and reviews can’t fully work yet. ${S.me?.role === 'admin' || S.me?.email === HW.C.SUPPORT_EMAIL ? 'In Supabase open <b>SQL Editor</b>, paste the whole of <b>supabase/setup.sql</b> from GitHub and press <b>Run</b>. Your data is kept.' : 'The administrator has been asked to update it. Your records stay safe on this phone.'}</p></div>` : ''}
     ${pend ? `<div class="note">${I('cloud-upload')}<span>${pend} record${pend > 1 ? 's' : ''} waiting to upload${S.me?.guest ? ' (sign in to upload)' : isOnline() ? '' : ' when you’re back online'}.</span></div>` : ''}
+    ${S.me && !S.me.guest ? dlCard() : ''}
     <div class="kpis">
       <div class="kpi"><span>Species</span><b>${st.species}</b></div>
       <div class="kpi"><span>Observations</span><b>${st.obs}</b></div>
@@ -334,6 +410,7 @@ function renderHome() {
   $('h-start') && ($('h-start').onclick = () => show('record'));
   $('h-resume') && ($('h-resume').onclick = () => show('record'));
   $('h-quick').onclick = () => openObservation({ standalone: true });
+  bindDlCard();
   $('home').querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => show(b.dataset.go)));
   $('home').querySelectorAll('[data-obs]').forEach((b) => (b.onclick = () => openObsDetail(b.dataset.obs)));
   if (ses) { clearInterval(homeTick); homeTick = setInterval(() => { if (S.view !== 'home' || !$('h-timer')) return clearInterval(homeTick); $('h-timer').textContent = hms(elapsed(SES() || ses)); }, 1000); }
@@ -401,7 +478,7 @@ function renderRecord() {
   el.innerHTML = `
     <div class="ses-top">
       <button class="ses-ic" id="r-mapbtn" aria-label="Show map" title="Map">${I('map')}</button>
-      <b class="mono" id="r-timer">${hms(elapsed(s))}</b><b class="mono" id="r-km">${dist(U.trackKm(s.track))}</b>
+      <b class="mono" id="r-timer">${mmss(elapsed(s))}</b><b class="mono" id="r-km">${dist(U.trackKm(s.track))}</b><span class="acc" id="r-gps">GPS…</span>
       <button class="ses-loc" id="r-loc">${I('map-pin')}<span id="r-locname">${esc(s.location_name || regionName(s.island_code || s.district_code || s.state_code) || 'Locating…')}</span></button>
       <button class="ses-ic" id="r-more" aria-label="Session details">${I('chevron-right', REC.open ? 'rot-up' : 'rot-down')}</button>
     </div>
@@ -444,7 +521,7 @@ function renderRecord() {
   $('r-stop').onclick = askStop;
   if (REC.showMap) recMap = drawMap('recmap', s.track, s.observations.filter((o) => o.lat != null).map((o) => ({ lat: o.lat, lng: o.lng, label: spName(o) })), { me: Geo.last });
   paintRecList(); paintLive(s, Geo.last); loadLikely(s);
-  recTick = setInterval(() => { const x = SES(); if (x && $('r-timer')) $('r-timer').textContent = hms(elapsed(x)); }, 1000);
+  recTick = setInterval(() => { const x = SES(); if (x && $('r-timer')) $('r-timer').textContent = mmss(elapsed(x)); }, 1000);
 }
 /** the species list: recorded first, then likely species; + adds one individual with the current time & GPS */
 function paintRecList() {
@@ -480,7 +557,7 @@ async function quickAdd(id) {
   const recent = x.observations.filter((o) => o.species_id === id && o._quick && Date.now() - new Date(o.observed_at) < 30 * 60000).pop();
   if (recent) { recent.count = (+recent.count || 0) + 1; }
   else {
-    const f = Geo.last && Date.now() - Geo.last.t < 30000 ? Geo.last : null;
+    const f = Geo.last && Date.now() - Geo.last.t < 15000 && Geo.last.acc <= 20 ? Geo.last : await Geo.best(20, 4000);
     const o = { id: U.uid(), trip_id: x.id, species_id: id, species_text: '', count: 1, observed_at: new Date().toISOString(), lat: f ? +f.lat.toFixed(6) : x.lat, lng: f ? +f.lng.toFixed(6) : x.lng,
       accuracy_m: f ? Math.round(f.acc) : x.start_accuracy_m, elevation_m: f ? elev(f) : x.start_elevation_m, location_name: x.location_name || '', state_code: x.state_code, district_code: x.district_code,
       island_code: x.island_code, region_code: x.region_code, id_confidence: 'certain', evidence: 'direct', mortality: '', origin: 'wild', sex: '', life_stage: '', habitat: '', microhabitat: '', behaviour: '',
@@ -497,6 +574,7 @@ function paintLive(s, f) {
   if (S.view !== 'record' || !$('r-km')) return;
   $('r-km').textContent = dist(U.trackKm(s.track));
   if ($('r-acc')) $('r-acc').textContent = f ? `±${Math.round(f.acc)} m` : Geo.err ? 'no fix' : '…';
+  if ($('r-gps')) { const a = f ? Math.round(f.acc) : null; $('r-gps').className = 'acc ' + (a == null ? 'poor' : a <= 10 ? 'good' : a <= 30 ? 'ok' : 'poor'); $('r-gps').textContent = a == null ? (Geo.err ? 'No GPS' : 'GPS…') : `±${a} m`; }
   if (recMap?.m && f) {
     recMap.line.setLatLngs(s.track);
     recMap.me ? recMap.me.setLatLng([f.lat, f.lng]) : (recMap.me = L.circleMarker([f.lat, f.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2b6cb0', fillOpacity: 1 }).addTo(recMap.m));
@@ -541,7 +619,8 @@ function renderRecordStart() {
 }
 async function startSession(type) {
   if (SES()) return renderRecord();
-  const f = Geo.last && Date.now() - Geo.last.t < 60000 ? Geo.last : await Promise.race([Geo.once(), new Promise((r) => setTimeout(() => r(null), 4000))]);
+  const go = $('s-go'); if (go) { go.disabled = true; go.querySelector('b').textContent = 'Getting an accurate GPS fix…'; }
+  const f = await Geo.best(20, 8000);
   const r = await placeOf(f);
   const s = {
     id: U.uid(), survey_type: type, title: $('s-title')?.value.trim() || '', observers: Math.max(1, +$('s-obs')?.value || 1), weather: $('s-weather')?.value || '',
@@ -713,7 +792,7 @@ async function openObservation(opts = {}) {
   const locked = base && base.review_status === 'verified';
   // position: taken at the moment the form opens (each observation keeps its own time + GPS)
   if (isNew) {
-    const f = Geo.last && Date.now() - Geo.last.t < 15000 ? Geo.last : await Promise.race([Geo.once(15000), new Promise((r) => setTimeout(() => r(null), 3500))]);
+    const f = await Geo.best(10, 4000);
     if (f) Object.assign(o, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), accuracy_m: Math.round(f.acc), elevation_m: elev(f) }, await placeOf(f));
     else if (ses) Object.assign(o, { state_code: ses.state_code, district_code: ses.district_code, island_code: ses.island_code, region_code: ses.region_code, location_name: ses.location_name });
     if (ses?.location_name && !o.location_name) o.location_name = ses.location_name;
@@ -790,10 +869,19 @@ async function openObservation(opts = {}) {
   $('o-plus').onclick = () => { $('o-count').value = (+$('o-count').value || 0) + 1; };
   const paintLoc = () => {
     $('o-loc').innerHTML = o.lat != null
-      ? `${I('map-pin')}<span><b>${(+o.lat).toFixed(5)}, ${(+o.lng).toFixed(5)}</b>${o.accuracy_m != null ? ` ±${o.accuracy_m} m` : ''}${o.elevation_m != null ? ` · ${o.elevation_m} m elev.` : ''}<br>${esc([o.location_name, regionName(o.island_code), regionName(o.district_code), regionName(o.state_code)].filter(Boolean).join(' · ') || '')}</span>`
+      ? `${I('map-pin')}<span><b>${(+o.lat).toFixed(5)}, ${(+o.lng).toFixed(5)}</b>${o.accuracy_m != null ? ` <span class="acc ${o.accuracy_m <= 10 ? 'good' : o.accuracy_m <= 30 ? 'ok' : 'poor'}">±${o.accuracy_m} m</span>` : ''}${o.elevation_m != null ? ` · ${o.elevation_m} m elev.` : ''}<br>${esc([o.location_name, regionName(o.island_code), regionName(o.district_code), regionName(o.state_code)].filter(Boolean).join(' · ') || '')}</span>`
       : `${I('triangle-alert')}<span>No GPS position. Enable location, or enter it manually below.</span>`;
   };
   paintLoc();
+  // keep improving the position for the first minute while the form is open (unless edited by hand)
+  if (isNew) {
+    const opened = Date.now();
+    const better = (f) => {
+      if (!f || o._manual || Date.now() - opened > 60000 || !$('o-loc')) return Geo.stop(better);
+      if (o.accuracy_m == null || f.acc < o.accuracy_m - 1) { Object.assign(o, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), accuracy_m: Math.round(f.acc), elevation_m: elev(f) }); $('o-lat').value = o.lat; $('o-lng').value = o.lng; paintLoc(); }
+    };
+    Geo.start(better);
+  }
   if (isNew && o.lat != null && !o.location_name) U.placeName(o.lat, o.lng).then((n) => { if (n && !o.location_name && $('o-loc')) { o.location_name = n; $('o-place').value = n; paintLoc(); } });
   $('o-regps').onclick = async () => {
     const f = await Geo.once(0); if (!f) return toast('No GPS fix');
@@ -802,7 +890,7 @@ async function openObservation(opts = {}) {
   };
   const manualPos = () => {
     const la = parseFloat($('o-lat').value), ln = parseFloat($('o-lng').value);
-    if (Number.isFinite(la) && Number.isFinite(ln) && (la !== o.lat || ln !== o.lng)) { Object.assign(o, { lat: la, lng: ln, accuracy_m: null, elevation_m: null }); placeOf({ lat: la, lng: ln }).then((r) => { Object.assign(o, r); paintLoc(); }); }
+    if (Number.isFinite(la) && Number.isFinite(ln) && (la !== o.lat || ln !== o.lng)) { o._manual = true; Object.assign(o, { lat: la, lng: ln, accuracy_m: null, elevation_m: null }); placeOf({ lat: la, lng: ln }).then((r) => { Object.assign(o, r); paintLoc(); }); }
   };
   $('o-lat').onchange = manualPos; $('o-lng').onchange = manualPos;
   $('o-place').oninput = () => { o.location_name = $('o-place').value.trim(); };
@@ -1059,10 +1147,12 @@ function renderSpeciesList() {
   const list = sp.filter((s) => (!CL.group || s.group === CL.group) && (!CL.family || s.family === CL.family) && (!CL.order || s.order === CL.order)
     && (!CL.seen || (CL.seen === 'seen' ? here[s.id] : !here[s.id])) && (!q || `${s.common} ${s.sci} ${s.family} ${s.genus}`.toLowerCase().includes(q))
     && (!f.has('venomous') || s.venom === 'venomous') && (!f.has('threatened') || ['CR', 'EN', 'VU'].includes(s.iucn)) && (!f.has('endemic') || s.endemic || S.clStatus[s.id] === 'endemic'))
-    .sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.common.localeCompare(b.common));
+    .sort((a, b) => (a.group || a.pack || '').localeCompare(b.group || b.pack || '') || (a.common < b.common ? -1 : a.common > b.common ? 1 : 0));
   const nSeen = sp.filter((s) => here[s.id]).length;
   const groups = [...new Set(sp.map((s) => s.group).filter(Boolean))];
   const nFilters = (CL.family ? 1 : 0) + (CL.order ? 1 : 0) + f.size;
+  const locked = packsRequired() ? sp.filter((s) => !isUnlocked(s.id)).length : 0;
+  const st = (reg && reg.kind !== 'country' ? S.region.split('-').slice(0, 2).join('-') : S.region);
   const parent = reg?.parent && regionOf(reg.parent);
   if (!sp.length) {
     el.innerHTML = `<div class="panel"><h3>No checklist for ${esc(reg?.name || S.region)} yet</h3><p class="sub">Reviewers publish district and island lists only where the data is reliable.</p>${parent ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px" data-r="${esc(parent.code)}">Open ${esc(parent.name)}</button>` : ''}</div>`;
@@ -1070,16 +1160,18 @@ function renderSpeciesList() {
     el.innerHTML = `
       <div class="panel" style="margin-top:0"><div class="row" style="justify-content:space-between"><h3>${nSeen} of ${sp.length} species seen</h3><span class="small muted">${Math.round((nSeen / sp.length) * 100)}%</span></div>
         <div class="progress"><i style="width:${(nSeen / sp.length) * 100}%"></i></div><p class="sub">Only your own observations tick a species.</p></div>
+      ${locked ? `<div class="panel lockpanel">${I('lock')}<div class="grow"><b>Free preview</b><p class="sub">The first 3 species of each group are open. Unlock all ${sp.length} species of ${esc(regionName(st))} with photos, ID notes and calls.</p></div><button class="btn btn-primary btn-sm" id="cl-buy">Unlock</button></div>` : ''}
       <div class="tools" style="margin-top:12px"><div class="search"><input id="cl-q" type="search" placeholder="Search ${sp.length} species" value="${esc(CL.q)}"></div>
         <button class="iconbtn" id="cl-filt" aria-label="Filters" style="position:relative">${I('sliders-horizontal')}${nFilters ? `<span class="cnt-badge">${nFilters}</span>` : ''}</button>
         <button class="iconbtn" id="cl-id" aria-label="Help me identify" title="Help me identify">${I('scan-search')}</button></div>
       <div class="chips"><button class="chip ${!CL.group ? 'on' : ''}" data-g="">All</button>${groups.map((g) => `<button class="chip ${CL.group === g ? 'on' : ''}" data-g="${g}">${esc(GROUPS[g] || g)}</button>`).join('')}
         <button class="chip ${CL.seen === 'not' ? 'on' : ''}" data-seen="not">Not yet seen</button></div>
-      <div class="list">${list.map((s) => { const h = here[s.id], a = any[s.id]; return `<button class="spr" data-id="${esc(s.id)}"><span class="th">${thumb(s)}</span>
+      <div class="list">${list.map((s) => { const h = here[s.id], a = any[s.id], lk = packsRequired() && !isUnlocked(s.id); return `<button class="spr ${lk ? 'locked' : ''}" data-id="${esc(s.id)}"><span class="th">${thumb(s)}${lk ? `<i class="lk">${I('lock')}</i>` : ''}</span>
         <span class="grow"><span class="t">${nmHtml(s)}${s.venom === 'venomous' ? ` <span class="vtag" title="Venomous">${I('triangle-alert')}</span>` : ''}</span><br><span class="s">${nameMode() === 'common' ? `<i>${esc(s.sci)}</i> · ` : ''}${h ? `seen ${fmtDate(h.last)}` : esc(s.family)}</span></span>
         <span class="ck ${h ? 'seen' : a ? 'else' : ''}" title="${h ? 'Seen here' : a ? 'Seen elsewhere' : 'Not yet seen'}">${h || a ? I('check') : ''}</span></button>`; }).join('') || '<div class="empty small">No species match.</div>'}</div>`;
   }
   el.querySelectorAll('[data-r]').forEach((b) => (b.onclick = () => setRegion(b.dataset.r)));
+  $('cl-buy') && ($('cl-buy').onclick = () => openStore(st));
   el.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { CL.group = b.dataset.g; renderSpeciesList(); }));
   el.querySelectorAll('[data-seen]').forEach((b) => (b.onclick = () => { CL.seen = CL.seen === 'not' ? '' : 'not'; renderSpeciesList(); }));
   el.querySelectorAll('.spr').forEach((b) => (b.onclick = () => openSpecies(b.dataset.id)));
@@ -1592,6 +1684,7 @@ async function afterLogin() {
   $('region').innerHTML = regionOptions(S.region);
   await Promise.all([loadUser(), loadChecklist(), loadMine()]);
   syncNow(); startLive();
+  api.dbVersion().then((v) => { S.dbv = v; if (v < 5 && S.view === 'home') renderHome(); }).catch(() => {});
   show(SES() ? 'record' : 'home');
 }
 function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.documentElement.setAttribute('data-theme', t) : document.documentElement.removeAttribute('data-theme'); }

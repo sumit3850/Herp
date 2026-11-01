@@ -47,6 +47,12 @@ jobs:
           c=$(probe -X POST -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/has_admin"); row "v3 · has_admin() (dashboard access options)" "HTTP $c $(head -c 80 /tmp/p.json)" "200 true/false"
           c=$(probe -X POST -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/ensure_profile"); row "accounts-live · ensure_profile()" "HTTP $c" "200 (null when signed out)"
           c=$(probe "$URL/rest/v1/access_requests?select=id&limit=0"); row "v3 · access_requests table" "HTTP $c" "200"
+          c=$(probe "$URL/rest/v1/regions?select=code,kind&limit=1"); row "v4 · regions.kind (districts/islands)" "HTTP $c $(head -c 80 /tmp/p.json)" "200"
+          c=$(probe "$URL/rest/v1/platform_settings?select=key&limit=0"); row "v4 · platform_settings" "HTTP $c" "200"
+          c=$(probe -X POST -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/public_observations"); row "v4 · public_observations()" "HTTP $c" "200"
+          c=$(probe "$URL/rest/v1/species_media?select=id&limit=0"); row "v5 · species_media" "HTTP $c" "200"
+          c=$(probe -X POST -H "Content-Type: application/json" -d '{"p_lat":11.6,"p_lng":92.7}' "$URL/rest/v1/rpc/nearby_species"); row "v5 · nearby_species()" "HTTP $c" "200"
+          c=$(probe "$URL/rest/v1/regions?select=code&code=eq.IN-AN-I-SAI"); row "v4 · island regions seeded" "HTTP $c $(head -c 60 /tmp/p.json)" "1 row"
           # ── sign-in / sign-up diagnostics (no account is created, no e-mail is sent) ──
           st=$(curl -s "${H[@]}" "$URL/auth/v1/settings"); echo "AUTH SETTINGS: $st"
           j2() { echo "$st" | python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }

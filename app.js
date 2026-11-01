@@ -241,7 +241,7 @@ addEventListener('hw-net', (e) => { paintSync(); if (e.detail) syncNow(); });
 setInterval(() => { if (outbox().length && document.visibilityState === 'visible') syncNow(); }, 45 * 1000);
 
 // ───────────────────────── navigation ─────────────────────────
-const VIEWS = { home: renderHome, record: renderRecord, explore: renderExplore, checklist: renderChecklist, obs: renderObs, profile: renderProfile, species: () => renderSpeciesPage() };
+const VIEWS = { home: renderHome, record: renderRecord, explore: renderExplore, obs: renderObs, profile: renderProfile, species: () => renderSpeciesPage() };
 function show(v) {
   if (v !== 'auth' && !VIEWS[v]) v = 'home';
   if (S.view === 'record' && v !== 'record') recLeave();
@@ -250,13 +250,23 @@ function show(v) {
   document.querySelectorAll('.view').forEach((x) => x.classList.toggle('on', x.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
   document.body.classList.toggle('authing', v === 'auth');
-  $('region').classList.toggle('hidden', !['explore', 'checklist'].includes(v));
+  document.body.classList.toggle('sppage', v === 'species');
+  paintChrome(v);
   VIEWS[v]?.();
   if (v !== 'auth') history.replaceState(null, '', '#' + v);
   const y0 = v === spPage.back && spPage.y ? spPage.y : 0; if (y0) spPage.y = 0;
   scrollTo(0, y0);
 }
 const rerender = () => VIEWS[S.view]?.();
+const TITLES = { home: ['Overview', ''], record: ['Record', ''], explore: ['Explore', ''], obs: ['My records', ''], profile: ['Settings', ''], species: ['Species', ''] };
+function paintChrome(v) {
+  const [t, sub] = TITLES[v] || ['', ''];
+  $('ptitle').textContent = t;
+  $('psub').textContent = v === 'home' ? new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }) : v === 'explore' ? 'Checklists, map and what’s been seen nearby' : sub;
+  const n = outbox().length; $('nb-pend').textContent = n || '';
+  const m = S.me || {};
+  $('side-user').innerHTML = m.id ? `<span class="av">${esc((m.full_name || m.username || '?').split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase())}</span><span class="grow" style="min-width:0"><b>${esc(m.full_name || m.username)}</b><span style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(m.email || 'offline')}</span></span>` : '';
+}
 $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.v); };
 $('region').onchange = async (e) => { S.region = e.target.value; U.lsSet('hw_region', S.region); await loadChecklist(); rerender(); };
 
@@ -298,33 +308,29 @@ function myStats() {
   return { byYear, obs: obs.length, individuals: obs.reduce((s, o) => s + (+o.count || 0), 0), species: species.size, sessions: ses.length, hours: mins / 60, km,
     verified: obs.filter((o) => o.review_status === 'verified').length, months, byGroup, roadkill: obs.filter((o) => o.mortality === 'roadkill').length };
 }
+function areaChart(vals) {
+  const W = 600, H = 150, n = vals.length, mx = Math.max(1, ...vals), x = (k) => (k / (n - 1)) * W, y = (v) => H - 8 - (v / mx) * (H - 24);
+  const pts = vals.map((v, k) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`);
+  return `<svg class="area" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="ag" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#f97316" stop-opacity=".28"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/></linearGradient></defs>
+    <path d="M0,${H} L${pts.join(' L')} L${W},${H} Z" fill="url(#ag)"/><polyline points="${pts.join(' ')}" fill="none" stroke="#f97316" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+}
 function renderHome() {
   const ses = SES(), st = myStats(), recent = allMyObs().slice(0, 5);
-  const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  const max = Math.max(1, ...st.months.map((m) => m.n));
   const pend = outbox().length;
   $('home').innerHTML = `
-    <div class="hello"><h1>${greet}${S.me?.full_name ? ', ' + esc(S.me.full_name.split(' ')[0]) : ''}</h1><p>${S.me?.guest ? 'Recording offline. Sign in from Profile to upload.' : 'Ready for the field?'}</p></div>
-    ${ses ? `<button class="startbtn live" id="h-resume">${I('timer')}<span class="grow"><b>${ses.status === 'paused' ? 'SESSION PAUSED' : 'SESSION IN PROGRESS'}</b><small>${esc(SURVEY_TYPES[ses.survey_type])} · <span id="h-timer">${hms(elapsed(ses))}</span> · ${ses.observations.length} observation${ses.observations.length === 1 ? '' : 's'}</small></span>${I('chevron-right')}</button>`
-      : `<button class="startbtn" id="h-start">${I('play')}<span class="grow"><b>START NEW HERPING SESSION</b><small>Time, GPS track, weather and every observation in one record</small></span>${I('chevron-right')}</button>`}
-    <button class="subbtn" id="h-quick">${I('camera')}<span class="grow">Add an observation without a session<br><span class="small muted" style="font-weight:400">Opportunistic sighting, shed skin, road-kill…</span></span>${I('chevron-right')}</button>
-    ${pend ? `<div class="note">${I('cloud-upload')}<span>${pend} record${pend > 1 ? 's are' : ' is'} saved on this phone and ${S.me?.guest ? 'will upload after you sign in' : isOnline() ? 'uploading now' : 'will upload when you are back online'}.</span></div>` : ''}
-    <div class="tiles">
-      <div class="tile"><b>${st.species}</b><span>Species (life list)</span></div>
-      <div class="tile"><b>${st.obs}</b><span>Observations</span></div>
-      <div class="tile"><b>${st.sessions}</b><span>Sessions</span></div>
-      <div class="tile"><b>${st.hours.toFixed(1)}</b><span>Hours in the field</span></div>
-      <div class="tile"><b>${dist(st.km).split(' ')[0]}</b><span>${miles() ? 'miles' : 'km'} surveyed</span></div>
-      <div class="tile"><b>${st.verified}</b><span>Verified records</span></div>
+    ${ses ? `<button class="startbtn live" id="h-resume">${I('timer')}<span class="grow"><b>${ses.status === 'paused' ? 'Session paused' : 'Session in progress'}</b><small>${esc(SURVEY_TYPES[ses.survey_type])} · <span id="h-timer">${hms(elapsed(ses))}</span> · ${ses.observations.length} observation${ses.observations.length === 1 ? '' : 's'}</small></span>${I('chevron-right')}</button>`
+      : `<button class="startbtn" id="h-start">${I('play')}<span class="grow"><b>Start a herping session</b><small>Timer, GPS track and observations in one record</small></span>${I('chevron-right')}</button>`}
+    <button class="subbtn" id="h-quick">${I('plus')}<span class="grow">Add a single observation</span>${I('chevron-right')}</button>
+    ${pend ? `<div class="note">${I('cloud-upload')}<span>${pend} record${pend > 1 ? 's' : ''} waiting to upload${S.me?.guest ? ' (sign in to upload)' : isOnline() ? '' : ' when you’re back online'}.</span></div>` : ''}
+    <div class="kpis">
+      <div class="kpi"><span>Species</span><b>${st.species}</b></div>
+      <div class="kpi"><span>Observations</span><b>${st.obs}</b></div>
+      <div class="kpi"><span>Sessions</span><b>${st.sessions}</b></div>
     </div>
-    <div class="card pad"><div class="row" style="justify-content:space-between"><b class="small">Observations · last 12 months</b><span class="tiny muted">${st.individuals} individuals</span></div>
-      <div class="bars">${st.months.map((m) => `<div title="${m.key}: ${m.n}"><i style="height:${Math.round((m.n / max) * 70)}px"></i><small>${m.label}</small></div>`).join('')}</div>
-      ${Object.keys(st.byGroup).length ? `<div class="legend" style="margin-top:8px">${Object.entries(st.byGroup).sort((a, b) => b[1] - a[1]).map(([g, n]) => `<span>${esc(GROUPS[g] || 'Other')} <b>${n}</b></span>`).join('')}</div>` : ''}</div>
-    ${st.byYear.length ? `<div class="sect"><h3>Your species by year</h3><span class="tiny muted">to ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · whole year</span></div>
-    <div class="card pad yearbars">${(() => { const mx = Math.max(1, ...st.byYear.map((y) => y.all)); const cur = String(new Date().getFullYear()); return st.byYear.slice(0, 6).map((y) => `<div class="yb ${y.y === cur ? 'cur' : ''}"><b>${y.y}</b><span class="n">${y.ytd}</span>
-      <span class="track"><i class="full" style="width:${(y.all / mx) * 100}%"></i><i style="width:${(y.ytd / mx) * 100}%"></i></span><span class="t">${y.y === cur ? '' : y.all}</span></div>`).join(''); })()}</div>` : ''}
-    <div class="sect"><h3>Recent observations</h3><button class="linkbtn" data-go="obs">See all</button></div>
-    <div class="card">${recent.length ? recent.map(obsRow).join('') : `<div class="empty small">No observations yet. Start a session or add an observation.</div>`}</div>`;
+    <div class="panel"><h3>Activity</h3><p class="sub">Observations · last 12 months</p>${areaChart(st.months.map((m) => m.n))}
+      <div class="area-x">${st.months.filter((_, k) => k % 3 === 0 || k === 11).map((m) => `<span>${new Date(m.key + '-01').toLocaleString('en', { month: 'short' })}</span>`).join('')}</div></div>
+    <div class="sect"><h3>Recent</h3>${recent.length ? '<button class="linkbtn" data-go="obs">See all</button>' : ''}</div>
+    <div class="list">${recent.length ? recent.map(obsRow).join('') : `<div class="empty small">Nothing recorded yet.</div>`}</div>`;
   $('h-start') && ($('h-start').onclick = () => show('record'));
   $('h-resume') && ($('h-resume').onclick = () => show('record'));
   $('h-quick').onclick = () => openObservation({ standalone: true });
@@ -506,7 +512,7 @@ function renderRecordStart() {
   startOffset = 0;
   const draw = () => {
     el.innerHTML = `
-      <div class="hello"><h1>New herping session</h1><p>Choose the survey type. Date, time, GPS position, place, elevation and accuracy are captured automatically.</p></div>
+      <p class="muted" style="margin:2px 0 12px">Choose a survey type. Time, GPS and place are filled in automatically.</p>
       <div class="startclock card"><div><span>Date</span><b id="s-date"></b></div><div><span>Start time</span><b id="s-time"></b>
         <div class="row" style="gap:8px;justify-content:center;margin-top:6px"><button class="round" id="s-earlier" aria-label="5 minutes earlier">−</button><button class="round" id="s-later" aria-label="5 minutes later">+</button></div></div></div>
       <label class="switchrow card"><span class="grow"><b>Record GPS track</b><br><span class="tiny muted">Route and distance for effort (turn off for a stationary search)</span></span><input type="checkbox" id="s-track" class="switch" ${U.lsGet('hw_track_on', true) ? 'checked' : ''}></label>
@@ -879,7 +885,7 @@ function renderObs() {
       <div class="chips"><button class="chip ${!obsStatus ? 'on' : ''}" data-s="">All ${all.length}</button>${all.some((o) => o._pending) ? `<button class="chip ${obsStatus === 'unsynced' ? 'on' : ''}" data-s="unsynced">Not uploaded</button>` : ''}
         ${Object.entries(STATUSES).map(([k, v]) => `<button class="chip ${obsStatus === k ? 'on' : ''}" data-s="${k}">${esc(v.label)} ${counts[k] || 0}</button>`).join('')}</div>
       <div class="row" style="gap:6px;margin:4px 0 10px"><button class="btn btn-ghost btn-sm" data-x="csv">${I('file-down')} CSV</button><button class="btn btn-ghost btn-sm" data-x="xlsx">${I('file-spreadsheet')} Excel</button><button class="btn btn-ghost btn-sm" data-x="pdf">${I('printer')} PDF</button></div>
-      <div class="card">${list.length ? list.slice(0, 400).map(obsRow).join('') : '<div class="empty small">No observations here yet.</div>'}</div>
+      <div class="list">${list.length ? list.slice(0, 400).map(obsRow).join('') : '<div class="empty small">No observations here yet.</div>'}</div>
       ${list.length > 400 ? `<p class="tiny muted" style="margin-top:6px">Showing 400 of ${list.length}. Export to see them all.</p>` : ''}`;
     $('obs-q').oninput = (e) => { obsQ = e.target.value; clearTimeout(renderObs._t); renderObs._t = setTimeout(() => { renderObs(); const i = $('obs-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
     body.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => { obsStatus = b.dataset.s; renderObs(); }));
@@ -911,8 +917,11 @@ function renderObs() {
       x.n += +o.count || 0; x.records++;
     }
     const rows = Object.entries(seen).map(([id, x]) => ({ s: byId(id) || { id, common: id, sci: '', pack: '' }, ...x })).sort((a, b) => b.first.localeCompare(a.first));
-    body.innerHTML = `<p class="small muted" style="margin-bottom:8px">${rows.length} species from your own observations (rejected records excluded). Checklists never add species here.</p>
-      <div class="card">${rows.length ? rows.map((r) => `<button class="obsrow" data-sp="${esc(r.s.id)}"><span class="th">${r.s.pack ? thumb(r.s) : I('leaf')}</span><span class="grow"><span class="t">${esc(r.s.common)}</span> <i class="small muted">${esc(r.s.sci)}</i><br>
+    const st = myStats();
+    body.innerHTML = `${st.byYear.length ? `<div class="panel" style="margin:0 0 12px"><h3>Species by year</h3><p class="sub">Up to ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} · whole year on the right</p><div class="yearbars" style="margin-top:8px">${(() => { const mx = Math.max(1, ...st.byYear.map((y) => y.all)); const cur = String(new Date().getFullYear()); return st.byYear.slice(0, 6).map((y) => `<div class="yb ${y.y === cur ? 'cur' : ''}"><b>${y.y}</b><span class="n">${y.ytd}</span>
+      <span class="track"><i class="full" style="width:${(y.all / mx) * 100}%"></i><i style="width:${(y.ytd / mx) * 100}%"></i></span><span class="t">${y.y === cur ? '' : y.all}</span></div>`).join(''); })()}</div></div>` : ''}
+      <p class="small muted" style="margin-bottom:8px">${rows.length} species from your own observations.</p>
+      <div class="list">${rows.length ? rows.map((r) => `<button class="obsrow" data-sp="${esc(r.s.id)}"><span class="th">${r.s.pack ? thumb(r.s) : I('leaf')}</span><span class="grow"><span class="t">${esc(r.s.common)}</span> <i class="small muted">${esc(r.s.sci)}</i><br>
         <span class="s">First ${fmtDate(r.first)} · last ${fmtDate(r.last)} · ${r.records} record${r.records > 1 ? 's' : ''}</span></span></button>`).join('') : '<div class="empty small">Your life list fills up as you record observations.</div>'}</div>`;
     body.querySelectorAll('[data-sp]').forEach((b) => (b.onclick = () => openSpecies(b.dataset.sp)));
   }
@@ -1029,57 +1038,77 @@ async function exportMine(kind, list) {
   } catch (e) { toast(e.message, 5000); }
 }
 
-// ═════════════════════════ CHECKLIST ═════════════════════════
-const CL = { q: '', group: '', family: '', genus: '', order: '', seen: '' };
-function renderChecklist() {
-  const el = $('cl'), reg = regionOf(S.region);
-  const ids = new Set(S.checklist);
-  const mine = allMyObs().filter((o) => o.species_id && o.review_status !== 'rejected');
-  const seenHere = {}, seenAny = {};
-  for (const o of mine) {
-    const a = (seenAny[o.species_id] ||= { first: o.observed_at, last: o.observed_at });
+// ═════════════════════════ EXPLORE › CHECKLIST (one list per state / region) ═════════════════════════
+const CL = { q: '', group: '', family: '', order: '', seen: '', flags: new Set() };
+const CL_FLAGS = [['venomous', 'Venomous'], ['threatened', 'Threatened (CR/EN/VU)'], ['endemic', 'Endemic']];
+function seenMaps() {
+  const here = {}, any = {};
+  for (const o of allMyObs()) {
+    if (!o.species_id || o.review_status === 'rejected') continue;
+    const a = (any[o.species_id] ||= { first: o.observed_at, last: o.observed_at });
     if (o.observed_at < a.first) a.first = o.observed_at; if (o.observed_at > a.last) a.last = o.observed_at;
-    if (obsInRegion(o, S.region)) { const h = (seenHere[o.species_id] ||= { first: o.observed_at, last: o.observed_at, n: 0 }); h.n++; if (o.observed_at < h.first) h.first = o.observed_at; if (o.observed_at > h.last) h.last = o.observed_at; }
+    if (obsInRegion(o, S.region)) { const h = (here[o.species_id] ||= { first: o.observed_at, last: o.observed_at }); if (o.observed_at < h.first) h.first = o.observed_at; if (o.observed_at > h.last) h.last = o.observed_at; }
   }
-  const sp = S.index.filter((s) => ids.has(s.id));
-  const q = CL.q.toLowerCase();
-  const uniq = (k) => [...new Set(sp.map((s) => s[k]).filter(Boolean))].sort();
-  const list = sp.filter((s) => (!CL.group || s.group === CL.group) && (!CL.family || s.family === CL.family) && (!CL.genus || s.genus === CL.genus) && (!CL.order || s.order === CL.order)
-    && (!CL.seen || (CL.seen === 'seen' ? seenHere[s.id] : !seenHere[s.id])) && (!q || `${s.common} ${s.sci} ${s.family}`.toLowerCase().includes(q)))
-    .sort((a, b) => (a.order || '').localeCompare(b.order || '') || (a.family || '').localeCompare(b.family || '') || a.sci.localeCompare(b.sci));
-  const nSeen = sp.filter((s) => seenHere[s.id]).length;
+  return { here, any };
+}
+function renderSpeciesList() {
+  const el = $('ex-species'), reg = regionOf(S.region);
+  const ids = new Set(S.checklist), sp = S.index.filter((s) => ids.has(s.id));
+  const { here, any } = seenMaps();
+  const q = CL.q.trim().toLowerCase(), f = CL.flags;
+  const list = sp.filter((s) => (!CL.group || s.group === CL.group) && (!CL.family || s.family === CL.family) && (!CL.order || s.order === CL.order)
+    && (!CL.seen || (CL.seen === 'seen' ? here[s.id] : !here[s.id])) && (!q || `${s.common} ${s.sci} ${s.family} ${s.genus}`.toLowerCase().includes(q))
+    && (!f.has('venomous') || s.venom === 'venomous') && (!f.has('threatened') || ['CR', 'EN', 'VU'].includes(s.iucn)) && (!f.has('endemic') || s.endemic || S.clStatus[s.id] === 'endemic'))
+    .sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.common.localeCompare(b.common));
+  const nSeen = sp.filter((s) => here[s.id]).length;
+  const groups = [...new Set(sp.map((s) => s.group).filter(Boolean))];
+  const nFilters = (CL.family ? 1 : 0) + (CL.order ? 1 : 0) + f.size;
   const parent = reg?.parent && regionOf(reg.parent);
-  const kids = S.regions.filter((r) => r.parent === S.region);
-  const sel = (k, label, opts) => `<select data-f="${k}"><option value="">${label}</option>${opts.map((v) => `<option ${CL[k] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
-  el.innerHTML = `<div class="hello"><h1>${esc(reg?.name || S.region)}</h1><p>${esc(cap(reg?.kind || ''))}${parent ? ' in ' + esc(parent.name) : ''} · official checklist</p></div>
-    ${sp.length ? `<div class="card pad"><div class="row" style="justify-content:space-between"><b>You have seen ${nSeen} of ${sp.length} species here</b><span class="small muted">${Math.round((nSeen / sp.length) * 100)}%</span></div>
-      <div class="progress"><i style="width:${(nSeen / sp.length) * 100}%"></i></div><p class="tiny muted">Only your own uploaded or saved observations tick a species, never the checklist itself.</p></div>`
-      : `<div class="card pad"><b>No species list has been published for ${esc(reg?.name || S.region)} yet.</b><p class="small muted" style="margin-top:4px">Reviewers add district and island lists only where the data is reliable.${parent ? ` <button class="linkbtn" data-r="${esc(parent.code)}">See ${esc(parent.name)}</button>` : ''}</p></div>`}
-    ${kids.length ? `<div class="chips" style="margin-top:10px">${kids.map((k) => `<button class="chip" data-r="${esc(k.code)}">${esc(k.name)}</button>`).join('')}</div>` : ''}
-    ${sp.length ? `<div class="search" style="margin-top:10px"><input id="cl-q" type="search" placeholder="Search this checklist" value="${esc(CL.q)}"></div>
-    <div class="chips"><button class="chip ${!CL.seen ? 'on' : ''}" data-seen="">All</button><button class="chip ${CL.seen === 'seen' ? 'on' : ''}" data-seen="seen">Seen</button><button class="chip ${CL.seen === 'not' ? 'on' : ''}" data-seen="not">Not yet recorded</button></div>
-    <div class="filters">${sel('group', 'All groups', uniq('group').map((g) => g))}${sel('order', 'All orders', uniq('order'))}${sel('family', 'All families', uniq('family'))}</div>
-    <div class="filters" style="grid-template-columns:1fr">${sel('genus', 'All genera', uniq('genus'))}</div>
-    <p class="small muted" style="margin:4px 0 6px">${list.length} species</p>
-    <div class="card">${list.map((s) => { const h = seenHere[s.id], a = seenAny[s.id]; return `<button class="cl-row" data-id="${esc(s.id)}"><span class="ck ${h ? 'seen' : a ? 'else' : ''}" title="${h ? 'Seen here' : a ? 'Seen elsewhere' : 'Not yet recorded'}">${h || a ? I('check') : ''}</span>
-      <span class="grow"><b>${nmHtml(s)}</b>${nameMode() === 'common' ? ` <i class="small muted">${esc(s.sci)}</i>` : ''}<br><span class="tiny muted">${esc(s.family)}${h ? ` · first ${fmtDate(h.first)} · latest ${fmtDate(h.last)}` : a ? ' · seen elsewhere' : ''}</span></span>
-      ${S.clStatus[s.id] && S.clStatus[s.id] !== 'native' ? `<span class="badge">${esc(cap(S.clStatus[s.id]))}</span>` : ''}</button>`; }).join('') || '<div class="empty small">No species match.</div>'}</div>
-    <div class="legend" style="margin-top:8px"><span><i style="background:var(--forest-2)"></i>Seen here</span><span><i style="border:2px solid var(--forest-2)"></i>Seen elsewhere</span><span><i style="border:2px solid var(--line)"></i>Not yet recorded</span></div>` : ''}`;
-  el.querySelectorAll('[data-r]').forEach((b) => (b.onclick = async () => { S.region = b.dataset.r; U.lsSet('hw_region', S.region); $('region').innerHTML = regionOptions(S.region); await loadChecklist(); renderChecklist(); }));
-  el.querySelectorAll('[data-seen]').forEach((b) => (b.onclick = () => { CL.seen = b.dataset.seen; renderChecklist(); }));
-  el.querySelectorAll('[data-f]').forEach((s) => (s.onchange = () => { CL[s.dataset.f] = s.value; renderChecklist(); }));
-  el.querySelector('select[data-f=group]')?.querySelectorAll('option').forEach((o) => { if (o.value) o.textContent = GROUPS[o.value] || o.value; });
-  $('cl-q') && ($('cl-q').oninput = (e) => { CL.q = e.target.value; clearTimeout(renderChecklist._t); renderChecklist._t = setTimeout(() => { renderChecklist(); const i = $('cl-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); });
-  el.querySelectorAll('.cl-row').forEach((b) => (b.onclick = () => openSpecies(b.dataset.id)));
+  if (!sp.length) {
+    el.innerHTML = `<div class="panel"><h3>No checklist for ${esc(reg?.name || S.region)} yet</h3><p class="sub">Reviewers publish district and island lists only where the data is reliable.</p>${parent ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px" data-r="${esc(parent.code)}">Open ${esc(parent.name)}</button>` : ''}</div>`;
+  } else {
+    el.innerHTML = `
+      <div class="panel" style="margin-top:0"><div class="row" style="justify-content:space-between"><h3>${nSeen} of ${sp.length} species seen</h3><span class="small muted">${Math.round((nSeen / sp.length) * 100)}%</span></div>
+        <div class="progress"><i style="width:${(nSeen / sp.length) * 100}%"></i></div><p class="sub">Only your own observations tick a species.</p></div>
+      <div class="tools" style="margin-top:12px"><div class="search"><input id="cl-q" type="search" placeholder="Search ${sp.length} species" value="${esc(CL.q)}"></div>
+        <button class="iconbtn" id="cl-filt" aria-label="Filters" style="position:relative">${I('sliders-horizontal')}${nFilters ? `<span class="cnt-badge">${nFilters}</span>` : ''}</button>
+        <button class="iconbtn" id="cl-id" aria-label="Help me identify" title="Help me identify">${I('scan-search')}</button></div>
+      <div class="chips"><button class="chip ${!CL.group ? 'on' : ''}" data-g="">All</button>${groups.map((g) => `<button class="chip ${CL.group === g ? 'on' : ''}" data-g="${g}">${esc(GROUPS[g] || g)}</button>`).join('')}
+        <button class="chip ${CL.seen === 'not' ? 'on' : ''}" data-seen="not">Not yet seen</button></div>
+      <div class="list">${list.map((s) => { const h = here[s.id], a = any[s.id]; return `<button class="spr" data-id="${esc(s.id)}"><span class="th">${thumb(s)}</span>
+        <span class="grow"><span class="t">${nmHtml(s)}${s.venom === 'venomous' ? ` <span class="vtag" title="Venomous">${I('triangle-alert')}</span>` : ''}</span><br><span class="s">${nameMode() === 'common' ? `<i>${esc(s.sci)}</i> · ` : ''}${h ? `seen ${fmtDate(h.last)}` : esc(s.family)}</span></span>
+        <span class="ck ${h ? 'seen' : a ? 'else' : ''}" title="${h ? 'Seen here' : a ? 'Seen elsewhere' : 'Not yet seen'}">${h || a ? I('check') : ''}</span></button>`; }).join('') || '<div class="empty small">No species match.</div>'}</div>`;
+  }
+  el.querySelectorAll('[data-r]').forEach((b) => (b.onclick = () => setRegion(b.dataset.r)));
+  el.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { CL.group = b.dataset.g; renderSpeciesList(); }));
+  el.querySelectorAll('[data-seen]').forEach((b) => (b.onclick = () => { CL.seen = CL.seen === 'not' ? '' : 'not'; renderSpeciesList(); }));
+  el.querySelectorAll('.spr').forEach((b) => (b.onclick = () => openSpecies(b.dataset.id)));
+  $('cl-q') && ($('cl-q').oninput = (e) => { CL.q = e.target.value; clearTimeout(renderSpeciesList._t); renderSpeciesList._t = setTimeout(() => { renderSpeciesList(); const i = $('cl-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 200); });
+  $('cl-id') && ($('cl-id').onclick = () => { Object.assign(IDF, { step: 0, pack: null, colors: new Set(), pattern: null, time: null }); openSheet('<div id="idf"></div>'); renderIdentify(); });
+  $('cl-filt') && ($('cl-filt').onclick = () => {
+    const uniq = (k) => [...new Set(sp.map((s) => s[k]).filter(Boolean))].sort();
+    openSheet(`<h3>Filters</h3>
+      <div class="fld"><label>Order</label><select id="cf-o"><option value="">All orders</option>${uniq('order').map((v) => `<option ${CL.order === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+      <div class="fld"><label>Family</label><select id="cf-f"><option value="">All families</option>${uniq('family').map((v) => `<option ${CL.family === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+      <div class="fld"><label>Show only</label><div class="chips" style="flex-wrap:wrap">${CL_FLAGS.map(([k, l]) => `<button class="chip ${f.has(k) ? 'on' : ''}" data-fl="${k}">${l}</button>`).join('')}</div></div>
+      <div class="row" style="gap:8px;margin-top:14px"><button class="btn btn-ghost grow" id="cf-clr">Clear</button><button class="btn btn-primary grow" id="cf-ok">Show results</button></div>`);
+    $('sheetbody').querySelectorAll('[data-fl]').forEach((b) => (b.onclick = () => { f.has(b.dataset.fl) ? f.delete(b.dataset.fl) : f.add(b.dataset.fl); b.classList.toggle('on'); }));
+    $('cf-clr').onclick = () => { Object.assign(CL, { family: '', order: '' }); f.clear(); closeSheet(); renderSpeciesList(); };
+    $('cf-ok').onclick = () => { CL.order = $('cf-o').value; CL.family = $('cf-f').value; closeSheet(); renderSpeciesList(); };
+  });
+}
+async function setRegion(code) {
+  S.region = code; U.lsSet('hw_region', code); $('region').value = code;
+  await loadChecklist(); rerender();
 }
 
 // ═════════════════════════ EXPLORE: map · species · identify ═════════════════════════
-let exTab = 'nearby', exMap = null;
+let exTab = 'species', exMap = null;
 const NB = { days: 30, km: 50 };
 async function renderNearby() {
   const el = $('ex-nearby'), reg = regionOf(S.region);
   const from = NB.days ? new Date(Date.now() - NB.days * 864e5).toISOString().slice(0, 10) : null;
-  el.innerHTML = `<div class="nbhead"><div class="grow"><h2>Explore nearby</h2><p class="small muted">${NB.days ? `${NB.days} days` : 'All time'} · ${esc(reg?.name || S.region)}</p></div>
+  el.innerHTML = `<div class="nbhead"><div class="grow"><b>Seen in ${esc(reg?.name || S.region)}</b></div>
       <select id="nb-days" style="width:auto">${[[7, '7 days'], [30, '30 days'], [365, '1 year'], [0, 'All time']].map(([d, l]) => `<option value="${d}" ${NB.days === d ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="search"><input id="nb-q" type="search" placeholder="Search species seen in this area"></div>
     <div id="nb-body"><div class="empty small">Loading…</div></div>`;
@@ -1119,7 +1148,7 @@ async function renderNearby() {
     $('nb-list').scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   body.querySelectorAll('[data-l]').forEach((b) => (b.onclick = () => showList(b.dataset.l)));
-  body.querySelector('[data-top]').onclick = () => { exTab = 'top'; renderExplore(); };
+  body.querySelector('[data-top]').onclick = () => { openSheet('<div id="ex-top"></div>'); renderTop(); };
   $('nb-q').oninput = (e) => {
     const q = e.target.value.trim().toLowerCase();
     if (!q) { $('nb-list').innerHTML = ''; return; }
@@ -1134,16 +1163,14 @@ async function renderTop() {
   const from = TOP.period === 'year' ? `${new Date().getFullYear()}-01-01` : TOP.period === 'month' ? new Date().toISOString().slice(0, 7) + '-01' : null;
   el.innerHTML = `<h2>Top herpers</h2><p class="small muted">Ranked by distinct species recorded; number of records breaks ties. Private and rejected records don’t count.</p>
     <div class="pillseg" style="margin-top:10px">${[['all', 'All time'], ['year', 'This year'], ['month', 'This month']].map(([k, l]) => `<button data-p="${k}" class="${TOP.period === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-    <div class="filters" style="grid-template-columns:1fr 1fr;margin-top:8px"><select id="tp-reg">${regionOptions(S.region)}</select>
-      <select id="tp-grp"><option value="">All herps</option>${Object.entries(GROUPS).map(([k, l]) => `<option value="${k}" ${TOP.group === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="filters" style="grid-template-columns:1fr;margin-top:8px"><select id="tp-grp"><option value="">All herps</option>${Object.entries(GROUPS).map(([k, l]) => `<option value="${k}" ${TOP.group === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div id="tp-body"><div class="empty small">Loading…</div></div>`;
   el.querySelectorAll('[data-p]').forEach((b) => (b.onclick = () => { TOP.period = b.dataset.p; renderTop(); }));
   $('tp-grp').onchange = (e) => { TOP.group = e.target.value; renderTop(); };
-  $('tp-reg').onchange = async (e) => { S.region = e.target.value; U.lsSet('hw_region', S.region); $('region').innerHTML = regionOptions(S.region); await loadChecklist(); renderTop(); };
   let rows = [];
   try { rows = await api.leaderboard({ region: S.region, from, group: TOP.group, limit: 100 }); }
   catch (e) { if ($('tp-body')) $('tp-body').innerHTML = `<div class="empty small">${esc(HW.isNetError(e) ? 'Connect to the internet to see the leaderboard.' : e.message)}</div>`; return; }
-  if (exTab !== 'top' || !$('tp-body')) return;
+  if (!$('tp-body')) return;
   const ini = (r) => esc((r.full_name || r.username || '?').trim()[0].toUpperCase());
   const who = (r) => esc(r.full_name || r.username);
   const podium = [rows[1], rows[0], rows[2]].map((r, i) => (r ? `<div class="pod p${[2, 1, 3][i]}"><div class="pn">${who(r)}<br><b>${r.species} sp</b></div><div class="pa">${ini(r)}<span>${r.rank}</span></div><div class="pb"></div></div>` : '<div class="pod"></div>')).join('');
@@ -1156,28 +1183,28 @@ const EX = { species: '', family: '', from: '', to: '', status: '', mine: true, 
 $('ex-tabs').onclick = (e) => { const b = e.target.closest('[data-x]'); if (b) { exTab = b.dataset.x; renderExplore(); } };
 function renderExplore() {
   document.querySelectorAll('#ex-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.x === exTab));
-  ['nearby', 'map', 'guide', 'identify', 'top'].forEach((t) => $('ex-' + t).classList.toggle('hidden', t !== exTab));
-  ({ nearby: renderNearby, map: renderExMap, guide: renderGuide, identify: renderIdentify, top: renderTop })[exTab]();
+  ['species', 'map', 'nearby'].forEach((t) => $('ex-' + t).classList.toggle('hidden', t !== exTab));
+  ({ species: renderSpeciesList, map: renderExMap, nearby: renderNearby })[exTab]();
 }
 const GROUP_COLOR = { snake: '#c53030', lizard: '#c98a16', gecko: '#b7791f', skink: '#9c6b1f', agama: '#dd6b20', monitor: '#7b5b2a', chameleon: '#5a8f3c', turtle: '#2b6cb0', tortoise: '#4a6fa5', crocodilian: '#2c5282', frog: '#2f855a', toad: '#38a169', caecilian: '#805ad5' };
 function renderExMap() {
   const el = $('ex-map');
   const fams = [...new Set(S.index.map((s) => s.family).filter(Boolean))].sort();
-  el.innerHTML = `<div class="filters">
+  el.innerHTML = `<div class="filters" style="grid-template-columns:1fr 1fr">
       <select id="ex-sp"><option value="">All species</option>${S.index.slice().sort((a, b) => a.common.localeCompare(b.common)).map((s) => `<option value="${esc(s.id)}" ${EX.species === s.id ? 'selected' : ''}>${esc(s.common)}</option>`).join('')}</select>
       <select id="ex-fam"><option value="">All families</option>${fams.map((f) => `<option ${EX.family === f ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+</div>
+    <details class="more" ${EX.status || EX.from || EX.to ? 'open' : ''} style="margin:-2px 0 8px"><summary>Date and status</summary><div class="filters" style="margin-top:6px">
       <select id="ex-st"><option value="">Any status</option>${Object.entries(STATUSES).filter(([k]) => k !== 'rejected').map(([k, v]) => `<option value="${k}" ${EX.status === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select>
-      <input type="date" id="ex-from" value="${EX.from}" aria-label="From date"><input type="date" id="ex-to" value="${EX.to}" aria-label="To date">
-      <select id="ex-reg">${regionOptions(S.region)}</select></div>
+      <input type="date" id="ex-from" value="${EX.from}" aria-label="From date"><input type="date" id="ex-to" value="${EX.to}" aria-label="To date"></div></details>
     <div class="row" style="gap:14px;margin-bottom:6px"><label class="row small" style="gap:6px"><input type="checkbox" id="ex-mine" style="width:18px;min-height:18px" ${EX.mine ? 'checked' : ''}> My observations</label>
       <label class="row small" style="gap:6px"><input type="checkbox" id="ex-routes" style="width:18px;min-height:18px" ${EX.routes ? 'checked' : ''}> My routes</label><span class="grow"></span><span class="small muted" id="ex-n"></span></div>
     <div id="exmap" style="height:58vh;min-height:320px"></div>
     <div class="legend" id="ex-leg"></div>
-    <p class="tiny muted" style="margin-top:6px">Public records from all observers (private and restricted records are hidden; sensitive species are shown at reduced precision). Routes are your own sessions, drawn as a separate layer.</p>`;
+    <p class="tiny muted" style="margin-top:6px">Public records only. Sensitive species are shown at reduced precision.</p>`;
   const bind = (id, k, ev = 'onchange', val = (e) => e.target.value) => ($(id)[ev] = (e) => { EX[k] = val(e); paintExMap(); });
   bind('ex-sp', 'species'); bind('ex-fam', 'family'); bind('ex-st', 'status'); bind('ex-from', 'from'); bind('ex-to', 'to');
   bind('ex-mine', 'mine', 'onchange', (e) => e.target.checked); bind('ex-routes', 'routes', 'onchange', (e) => e.target.checked);
-  $('ex-reg').onchange = async (e) => { S.region = e.target.value; U.lsSet('hw_region', S.region); $('region').innerHTML = regionOptions(S.region); await loadChecklist(); paintExMap(); };
   if (exMap) { try { exMap.m.remove(); } catch {} }
   exMap = drawMap('exmap', [], []);
   if (exMap.m) { exMap.obs = L.layerGroup().addTo(exMap.m); exMap.routes = L.layerGroup().addTo(exMap.m); }
@@ -1239,35 +1266,6 @@ function drawMap(elId, track, pts, opts = {}) {
   m.on('dragstart', () => (out.panned = true));
   return out;
 }
-
-// ── species guide ──
-const FILTERS = [['venomous', 'Venomous'], ['poisonous', 'Poisonous'], ['threatened', 'Threatened (CR/EN/VU)'], ['endemic', 'Endemic'], ['unseen', 'Not yet seen by me']];
-function renderGuide() {
-  const G = S.guide, cl = new Set(S.checklist), q = G.q.trim().toLowerCase();
-  const seen = new Set(allMyObs().filter((o) => o.review_status !== 'rejected').map((o) => o.species_id));
-  const inRegion = S.index.filter((s) => cl.has(s.id));
-  const uniq = (k) => [...new Set(inRegion.map((s) => s[k]).filter(Boolean))].sort();
-  $('packchips').innerHTML = [['all', 'All groups'], ...S.packs.map((p) => [p.id, p.name])].map(([id, l]) => `<button class="chip ${G.pack === id ? 'on' : ''}" data-p="${id}">${id === 'all' ? '' : dot(id)}${esc(l)}</button>`).join('');
-  $('taxfilters').innerHTML = [['order', 'All orders'], ['family', 'All families'], ['genus', 'All genera']].map(([k, l]) => `<select data-tf="${k}"><option value="">${l}</option>${uniq(k).map((v) => `<option ${G[k] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`).join('');
-  $('filterchips').innerHTML = FILTERS.map(([id, l]) => `<button class="chip ${G.filters.has(id) ? 'on' : ''}" data-f="${id}">${esc(l)}</button>`).join('');
-  const f = G.filters;
-  const list = inRegion.filter((s) => (G.pack === 'all' || s.pack === G.pack) && (!G.family || s.family === G.family) && (!G.genus || s.genus === G.genus) && (!G.order || s.order === G.order)
-    && (!q || `${s.common} ${s.sci} ${s.family} ${s.genus}`.toLowerCase().includes(q))
-    && (!f.has('venomous') || s.venom === 'venomous') && (!f.has('poisonous') || s.toxic === 'poisonous') && (!f.has('threatened') || ['CR', 'EN', 'VU'].includes(s.iucn))
-    && (!f.has('endemic') || s.endemic || S.clStatus[s.id] === 'endemic') && (!f.has('unseen') || !seen.has(s.id)))
-    .sort((a, b) => S.packs.findIndex((p) => p.id === a.pack) - S.packs.findIndex((p) => p.id === b.pack) || a.common.localeCompare(b.common));
-  const grid = U.lsGet('hw_grid', false);
-  $('guidecount').innerHTML = `<span class="grow">${list.length} species · ${esc(regionName(S.region))}</span><span class="viewtog"><button data-g="1" class="${grid ? 'on' : ''}" aria-label="Grid">${I('layers')}</button><button data-g="0" class="${grid ? '' : 'on'}" aria-label="List">${I('list')}</button></span>`;
-  $('splist').classList.toggle('grid', grid);
-  $('splist').innerHTML = list.length ? list.map((s, i) => `<button class="card sp" style="--i:${i}" data-id="${s.id}"><div class="th">${thumb(s)}</div><div class="grow"><div class="nm">${nmHtml(s)} <span class="tag">${esc(GROUPS[s.group] || packOf(s.pack).name)}</span>${seen.has(s.id) ? ` <span style="color:var(--forest-2)">${I('circle-check')}</span>` : ''}</div><div class="sci"><i>${esc(s.sci)}</i> · ${esc(s.family)}</div><div class="pills">${pills(s)}</div></div></button>`).join('')
-    : `<div class="empty">No species match. ${S.checklist.length ? 'Try clearing filters.' : 'No checklist has been published for this region yet.'}</div>`;
-}
-$('packchips').onclick = (e) => { const b = e.target.closest('[data-p]'); if (b) { S.guide.pack = b.dataset.p; renderGuide(); } };
-$('filterchips').onclick = (e) => { const b = e.target.closest('[data-f]'); if (b) { const F = S.guide.filters; F.has(b.dataset.f) ? F.delete(b.dataset.f) : F.add(b.dataset.f); renderGuide(); } };
-$('taxfilters').onchange = (e) => { const s = e.target.closest('[data-tf]'); if (s) { S.guide[s.dataset.tf] = s.value; renderGuide(); } };
-$('q').oninput = (e) => { S.guide.q = e.target.value; renderGuide(); };
-$('guidecount').onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) { U.lsSet('hw_grid', b.dataset.g === '1'); renderGuide(); } };
-$('splist').onclick = (e) => { const b = e.target.closest('[data-id]'); if (b) openSpecies(b.dataset.id); };
 
 function unlockOffer(pack) {
   const isState = S.region.includes('-'), country = S.region.split('-')[0], state = S.region.split('-').slice(0, 2).join('-');
@@ -1455,7 +1453,7 @@ async function renderProfile() {
   el.innerHTML = `<div class="card pad"><div class="profile-head"><span class="avatar">${esc((m.full_name || m.username || '?').split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase())}</span>
       <div class="grow"><h2 style="font-size:19px">${esc(m.full_name || m.username || 'Offline recorder')}</h2><p class="small muted">${m.guest ? 'Not signed in' : `@${esc(m.username)} · ${esc(m.email || '')}`}</p>
       ${m.guest ? '' : `<span class="badge ${m.role === 'user' ? '' : 'ok'}" style="margin-top:4px">${I(m.role === 'user' ? 'user' : 'shield-check')} ${esc(ROLE_LABEL[m.role] || m.role)}</span>`}</div></div>
-      <div class="tiles" style="margin-bottom:0"><div class="tile"><b>${st.species}</b><span>Species</span></div><div class="tile"><b>${st.obs}</b><span>Observations</span></div><div class="tile"><b>${st.sessions}</b><span>Sessions</span></div></div></div>
+</div>
     ${m.guest ? `<button class="btn btn-primary btn-block" id="p-signin" style="margin-top:12px;min-height:50px">${I('user')} Sign in to upload ${n} saved record${n === 1 ? '' : 's'}</button>` : ''}
     <div class="sect"><h3>Sync</h3><span class="small muted">${n ? `${n} waiting` : 'All uploaded'}</span></div>
     <div class="card pad"><div class="row" style="gap:10px"><span class="dot ${!isOnline() ? 'off' : n ? 'pending' : ''}"></span><span class="grow small">${!isOnline() ? 'Offline. Records stay on this phone until you have signal.' : n ? `${n} record(s) waiting to upload.` : 'Everything is uploaded.'}</span>

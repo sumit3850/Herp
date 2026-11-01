@@ -312,7 +312,7 @@ body.recording main{padding-top:0}
 .sp-video{margin-bottom:10px}.sp-video iframe,.sp-video video{width:100%;aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
 .paper{display:flex;gap:12px;align-items:center;padding:12px;border-bottom:1px solid var(--line-soft);text-decoration:none;color:var(--ink)}
 .paper .ic{color:var(--forest-2);flex-shrink:0}
-@media(min-width:1024px){#v-species{margin:-4px -32px 0}.sp-gal figure{height:420px}}
+@media(min-width:1024px){#v-species{margin:-4px -24px 0}.sp-gal figure{height:420px}}
 @media(max-width:380px){.tiles{grid-template-columns:1fr 1fr}.filters{grid-template-columns:1fr 1fr}}
 
 /* ═══════════ v6 design: neutral, Inter, orange accent (overrides the older styles above) ═══════════ */
@@ -344,23 +344,25 @@ nav.side button.on{color:var(--ink)}nav.side button.on .i{background:var(--surfa
 nav.side .nb{position:absolute;top:2px;right:calc(50% - 22px);min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center}
 nav.side .nb:empty{display:none}
 body{padding-bottom:calc(70px + env(safe-area-inset-bottom))}
+/* desktop: horizontal top bar, no sidebar */
 @media(min-width:1024px){
-  body:not(.authing):not(.recording){padding-bottom:0;padding-left:260px}
-  nav.side{top:0;right:auto;bottom:0;width:260px;flex-direction:column;justify-content:flex-start;gap:2px;border-top:0;border-right:1px solid var(--line);padding:18px 14px}
-  nav.side .side-brand{display:flex;align-items:center;gap:12px;padding:4px 8px 22px}
-  nav.side .logo{width:34px;height:34px;border-radius:9px;background:var(--primary);color:var(--primary-fg);display:grid;place-items:center;font-weight:700;font-size:16px}
-  nav.side .side-brand b{font-size:17px;font-weight:650;letter-spacing:-.02em}
-  nav.side .side-grp{display:block;font-size:11.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-soft);padding:16px 10px 6px}
-  nav.side button{flex:0 0 auto;flex-direction:row;justify-content:flex-start;gap:12px;font-size:15px;padding:10px 12px;color:var(--ink);font-weight:500}
-  nav.side button .i .ic{width:19px;height:19px;color:var(--ink-soft)}
-  nav.side button:hover{background:var(--surface-2)}
-  nav.side button.on{background:var(--surface-2);font-weight:600}nav.side button.on .i{background:none;padding:0}nav.side button.on .i .ic{color:var(--ink)}
-  nav.side .nb{position:static;margin-left:auto;background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--line)}
-  nav.side .side-user{display:flex;align-items:center;gap:12px;margin-top:auto;padding:14px 8px 4px;border-top:1px solid var(--line)}
-  nav.side .side-user .av{width:36px;height:36px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:650;font-size:14px}
-  nav.side .side-user b{display:block;font-size:14px}nav.side .side-user span{font-size:12.5px;color:var(--ink-soft)}
-  header.bar{padding:22px 32px 14px}header.bar h1{font-size:22px}
-  main{padding:4px 32px 32px;max-width:960px;margin:0}
+  body:not(.authing):not(.recording){padding-bottom:0;padding-left:0;padding-top:64px}
+  nav.side{top:0;bottom:auto;height:64px;flex-direction:row;justify-content:flex-start;align-items:center;gap:4px;border-top:0;border-bottom:1px solid var(--line);padding:0 max(24px,calc((100vw - 1100px) / 2))}
+  nav.side .side-brand{display:flex;align-items:center;gap:10px;margin-right:22px}
+  nav.side .logo{width:32px;height:32px;border-radius:9px;background:var(--primary);color:var(--primary-fg);display:grid;place-items:center;font-weight:700;font-size:15px}
+  nav.side .side-brand b{font-size:16.5px;font-weight:650;letter-spacing:-.02em}
+  nav.side .side-grp{display:none}
+  nav.side button{flex:0 0 auto;flex-direction:row;gap:8px;font-size:14.5px;padding:8px 14px;color:var(--ink-soft);font-weight:500;border-radius:10px}
+  nav.side button .i .ic{width:18px;height:18px}
+  nav.side button:hover{background:var(--surface-2);color:var(--ink)}
+  nav.side button.on{background:var(--surface-2);color:var(--ink);font-weight:600}nav.side button.on .i{background:none;padding:0}
+  nav.side button[data-v=profile]{margin-left:auto}
+  nav.side .nb{position:static;background:var(--accent);color:#fff}
+  nav.side .side-user{display:flex;align-items:center;gap:10px;margin-left:8px;padding-left:14px;border-left:1px solid var(--line)}
+  nav.side .side-user .av{width:32px;height:32px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:650;font-size:13px}
+  nav.side .side-user b{display:block;font-size:13.5px;line-height:1.2}nav.side .side-user span{font-size:12px;color:var(--ink-soft)}
+  header.bar{top:64px;padding:22px max(24px,calc((100vw - 1100px) / 2)) 12px}header.bar h1{font-size:22px}
+  main{padding:4px 24px 32px;max-width:1100px;margin:0 auto}
 }
 body.authing nav.side,body.authing header.bar{display:none}
 /* cards & stats */
@@ -488,12 +490,10 @@ body.authing nav.side,body.authing header.bar{display:none}
 
 <nav class="side" id="tabs" aria-label="Main">
   <div class="side-brand"><span class="logo">H</span><b id="brand">HerpWatch</b></div>
-  <div class="side-grp">Workspace</div>
   <button data-v="home" class="on"><span class="i" data-ic="layout-dashboard"></span><span class="l">Home</span></button>
   <button data-v="record"><span class="i" data-ic="clipboard-list"></span><span class="l">Record</span></button>
   <button data-v="explore"><span class="i" data-ic="compass"></span><span class="l">Explore</span></button>
   <button data-v="obs"><span class="i" data-ic="binoculars"></span><span class="l">My records</span><span class="nb" id="nb-pend"></span></button>
-  <div class="side-grp">Settings</div>
   <button data-v="profile"><span class="i" data-ic="settings"></span><span class="l">Settings</span></button>
   <div class="side-user" id="side-user"></div>
 </nav>

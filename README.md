@@ -20,7 +20,7 @@ A field recording and species documentation platform for the **reptiles and amph
 
 ## Field app
 
-Five sections, in a clean neutral design (Inter, white cards, orange accent): a sidebar on desktop and a bottom bar on phones. **Home · Record · Explore · My records · Settings.**
+Five sections, in a clean neutral design (Inter, white cards, orange accent): a top bar on desktop and a bottom bar on phones (no sidebar). **Home · Record · Explore · My records · Settings.**
 
 - **Home.** *Start a herping session* (or the running session with its timer), *Add a single observation*, three key numbers (species, observations, sessions), an activity chart for the last 12 months and your recent records.
 - **Record (herping session).** Pick the survey type: *Day herping, Night herping, Road survey, Transect, Habitat survey, Opportunistic, Creek & mangrove, Stream & wetland*. Date and start time (adjustable), GPS position, accuracy, elevation, place name, state, district and island are captured automatically, and a **Record GPS track** switch records the route. While recording, the screen shows the timer, distance and place, a **Likely species** list (species recorded within 10 km, or the island/district/state checklist when offline) with a one-tap **+** (each tap adds one individual with its own time and GPS point), a search box to add any species or an unidentified animal, and a bar with filters, notes, recorded species and **Stop**. Stop asks “Are you done herping?”; *Stop track* opens a review page (date, location or *Choose location*, survey type, observers, minutes, distance, complete list yes/no, weather, comments, the species list) where you can go back to recording or **Submit**. The session survives app restarts and flat batteries.

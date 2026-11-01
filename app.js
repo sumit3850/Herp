@@ -200,15 +200,22 @@ async function placeOf(f) {
 const elev = (f) => (f?.alt == null ? null : Math.round(f.alt));
 
 // ───────────────────────── local stores ─────────────────────────
-const SES = () => U.lsGet('hw_session', null);           // the session being recorded
-const saveSES = (s, durable = true) => (durable ? U.durSet('hw_session', s) : U.lsSet('hw_session', s));
-const outbox = () => U.lsGet('hw_outbox', []);
-const saveOutbox = (o) => U.durSet('hw_outbox', o);
+// Everything saved on the phone is tagged with the account that made it, so records can never upload
+// under someone else's account if the phone is shared. Records made while signed out (owner null)
+// go to the account that signs in next.
+const ownerId = () => (S.me && !S.me.guest ? S.me.id : null);
+const isMine = (x) => !x.owner || x.owner === ownerId();
+const rawSES = () => U.lsGet('hw_session', null);
+const SES = () => { const x = rawSES(); return x && isMine(x) ? x : null; };           // the session being recorded
+const saveSES = (s, durable = true) => { if (s && s.owner === undefined) s.owner = ownerId(); return durable ? U.durSet('hw_session', s) : U.lsSet('hw_session', s); };
+const rawOutbox = () => U.lsGet('hw_outbox', []);
+const outbox = () => rawOutbox().filter(isMine);
+const saveOutbox = (mine) => U.durSet('hw_outbox', [...rawOutbox().filter((x) => !isMine(x)), ...mine.map((x) => ({ ...x, owner: x.owner ?? ownerId() }))]);
 function queue(item) {
   const o = outbox().filter((x) => !(x.kind === item.kind && x.id === item.id));
   // a delete cancels a pending upload of the same record
   const out = item.kind === 'del_obs' ? o.filter((x) => !(x.kind === 'obs' && x.id === item.id)) : item.kind === 'del_session' ? o.filter((x) => !(x.kind === 'session' && x.id === item.id)) : o;
-  out.push({ ...item, queued_at: new Date().toISOString() });
+  out.push({ ...item, owner: ownerId(), queued_at: new Date().toISOString() });
   saveOutbox(out); paintSync();
   return syncNow();
 }
@@ -407,7 +414,7 @@ function renderHome() {
       <div class="area-x">${st.months.filter((_, k) => k % 3 === 0 || k === 11).map((m) => `<span>${new Date(m.key + '-01').toLocaleString('en', { month: 'short' })}</span>`).join('')}</div></div>
     <div class="sect"><h3>Recent</h3>${recent.length ? '<button class="linkbtn" data-go="obs">See all</button>' : ''}</div>
     <div class="list">${recent.length ? recent.map(obsRow).join('') : `<div class="empty small">Nothing recorded yet.</div>`}</div>`;
-  $('h-start') && ($('h-start').onclick = () => show('record'));
+  $('h-start') && ($('h-start').onclick = () => { show('record'); startSession(); });
   $('h-resume') && ($('h-resume').onclick = () => show('record'));
   $('h-quick').onclick = () => openObservation({ standalone: true });
   bindDlCard();
@@ -557,16 +564,22 @@ async function quickAdd(id) {
   const recent = x.observations.filter((o) => o.species_id === id && o._quick && Date.now() - new Date(o.observed_at) < 30 * 60000).pop();
   if (recent) { recent.count = (+recent.count || 0) + 1; }
   else {
-    const f = Geo.last && Date.now() - Geo.last.t < 15000 && Geo.last.acc <= 20 ? Geo.last : await Geo.best(20, 4000);
+    const f = Geo.last && Date.now() - Geo.last.t < 30000 ? Geo.last : null;   // instant; refined below if a better fix arrives
     const o = { id: U.uid(), trip_id: x.id, species_id: id, species_text: '', count: 1, observed_at: new Date().toISOString(), lat: f ? +f.lat.toFixed(6) : x.lat, lng: f ? +f.lng.toFixed(6) : x.lng,
       accuracy_m: f ? Math.round(f.acc) : x.start_accuracy_m, elevation_m: f ? elev(f) : x.start_elevation_m, location_name: x.location_name || '', state_code: x.state_code, district_code: x.district_code,
       island_code: x.island_code, region_code: x.region_code, id_confidence: 'certain', evidence: 'direct', mortality: '', origin: 'wild', sex: '', life_stage: '', habitat: '', microhabitat: '', behaviour: '',
       activity: '', weather: x.weather || '', temperature_c: null, notes: '', privacy: byId(id)?.sensitive ? 'restricted' : U.lsGet('hw_privacy', 'public'), photos: [], _photos: [], _quick: true };
     if (f) Object.assign(o, await placeOf(f));
     x.observations.push(o);
+    if (!f || f.acc > 15) Geo.best(15, 6000).then((g) => {
+      const y = SES(), ob = y?.observations.find((z) => z.id === o.id);
+      if (!g || !ob || (ob.accuracy_m != null && g.acc >= ob.accuracy_m)) return;
+      Object.assign(ob, { lat: +g.lat.toFixed(6), lng: +g.lng.toFixed(6), accuracy_m: Math.round(g.acc), elevation_m: elev(g) }); saveSES(y, false);
+    });
     if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
   }
-  saveSES(x); REC.q = ''; if ($('r-q')) $('r-q').value = '';
+  saveSES(x, false); clearTimeout(quickAdd._t); quickAdd._t = setTimeout(() => { const y = SES(); if (y) saveSES(y); }, 1500);   // fast save now, triple-copy save once tapping stops
+  REC.q = ''; if ($('r-q')) $('r-q').value = '';
   const c = $('r-done')?.querySelector('.cnt-badge'); if (c) c.textContent = new Set(x.observations.map((o) => o.species_id || o.species_text)).size;
   paintRecList();
 }
@@ -586,53 +599,47 @@ function paintLive(s, f) {
 }
 function renderRecordStart() {
   const el = $('rec');
-  let type = U.lsGet('hw_last_type', 'night');
-  startOffset = 0;
-  const draw = () => {
-    el.innerHTML = `
-      <p class="muted" style="margin:2px 0 12px">Choose a survey type. Time, GPS and place are filled in automatically.</p>
-      <div class="startclock card"><div><span>Date</span><b id="s-date"></b></div><div><span>Start time</span><b id="s-time"></b>
-        <div class="row" style="gap:8px;justify-content:center;margin-top:6px"><button class="round" id="s-earlier" aria-label="5 minutes earlier">−</button><button class="round" id="s-later" aria-label="5 minutes later">+</button></div></div></div>
-      <label class="switchrow card"><span class="grow"><b>Record GPS track</b><br><span class="tiny muted">Route and distance for effort (turn off for a stationary search)</span></span><input type="checkbox" id="s-track" class="switch" ${U.lsGet('hw_track_on', true) ? 'checked' : ''}></label>
-      <div class="types">${Object.entries(SURVEY_TYPES).map(([k, l]) => `<button class="type ${k === type ? 'on' : ''}" data-t="${k}">${I(TYPE_ICON[k])}${esc(l)}</button>`).join('')}</div>
-      <div class="fld"><label for="s-title">Session name (optional)</label><input id="s-title" maxlength="120" placeholder="e.g. Chidiyatapu night walk"></div>
-      <div class="grid2"><div class="fld"><label for="s-obs">Observers</label><input id="s-obs" type="number" min="1" max="99" value="1"></div>
-        <div class="fld"><label for="s-weather">Weather</label><select id="s-weather"><option value="">—</option>${WEATHER.map((w) => `<option>${w}</option>`).join('')}</select></div></div>
-      <div class="loc" id="s-loc" style="margin-top:12px">${I('locate-fixed')}<span>Finding your position…</span></div>
-      <button class="startbtn" id="s-go" style="margin-top:14px">${I('play')}<span class="grow"><b>START SESSION</b><small>GPS tracking starts now</small></span></button>
-      <p class="tiny muted" style="margin-top:10px">Never handle animals to record them. A photo from a safe distance is enough; venomous snakes are common at night.</p>`;
-    el.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { type = b.dataset.t; U.lsSet('hw_last_type', type); el.querySelectorAll('[data-t]').forEach((x) => x.classList.toggle('on', x === b)); }));
-    $('s-go').onclick = () => startSession(type);
-    const paintClock = () => { const t = new Date(Date.now() + startOffset * 60000); $('s-date').textContent = t.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); $('s-time').textContent = fmtTime(t); };
-    paintClock(); clearInterval(recTick); recTick = setInterval(() => { if ($('s-time')) paintClock(); }, 15000);
-    $('s-earlier').onclick = () => { startOffset -= 5; paintClock(); };
-    $('s-later').onclick = () => { if (startOffset < 0) startOffset += 5; paintClock(); };
-    $('s-track').onchange = (e) => U.lsSet('hw_track_on', e.target.checked);
-    Geo.once().then(async (f) => {
-      if (!$('s-loc')) return;
-      if (!f) { $('s-loc').innerHTML = `${I('triangle-alert')}<span>No GPS fix yet. You can still start; the position is added as soon as GPS works. Allow location access for this site.</span>`; return; }
-      const r = await placeOf(f);
-      $('s-loc').innerHTML = `${I('map-pin')}<span><b>${f.lat.toFixed(5)}, ${f.lng.toFixed(5)}</b> ±${Math.round(f.acc)} m${elev(f) != null ? ` · ${elev(f)} m elevation` : ''}<br>${esc([regionName(r.island_code), regionName(r.district_code), regionName(r.state_code)].filter(Boolean).join(' · ') || 'Region unknown')}</span>`;
-    });
-  };
-  draw();
+  const now = new Date();
+  el.innerHTML = `
+    <div class="startcard">
+      <span class="muted">${now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+      <b class="bigtime">${fmtTime(now)}</b>
+      <div class="loc" id="s-loc">${I('locate-fixed')}<span>Finding your position…</span></div>
+      <button class="btn btn-primary bigstart" id="s-go">${I('play')} Start session</button>
+      <p class="tiny muted" style="margin-top:12px">Your route and every observation are recorded with time and GPS. You choose the survey type and other details when you finish.</p>
+    </div>
+    <button class="subbtn" id="s-single">${I('plus')}<span class="grow">Just add one observation</span>${I('chevron-right')}</button>`;
+  $('s-go').onclick = () => startSession();
+  $('s-single').onclick = () => openObservation({ standalone: true });
+  Geo.best(20, 8000).then(async (f) => {
+    if (!$('s-loc')) return;
+    if (!f) { $('s-loc').innerHTML = `${I('triangle-alert')}<span>No GPS yet. You can still start; allow location access for the route.</span>`; return; }
+    const r = await placeOf(f);
+    $('s-loc').innerHTML = `${I('map-pin')}<span>${esc([regionName(r.island_code || r.district_code), regionName(r.state_code)].filter(Boolean).join(', ') || 'Location found')} <span class="acc ${f.acc <= 10 ? 'good' : f.acc <= 30 ? 'ok' : 'poor'}">±${Math.round(f.acc)} m</span></span>`;
+  });
 }
 async function startSession(type) {
   if (SES()) return renderRecord();
-  const go = $('s-go'); if (go) { go.disabled = true; go.querySelector('b').textContent = 'Getting an accurate GPS fix…'; }
-  const f = await Geo.best(20, 8000);
-  const r = await placeOf(f);
+  const other = rawSES();
+  if (other && !isMine(other)) {   // a different account's session on this phone: keep it for them, finished
+    other.stopped = true; other.ended_at = other.ended_at || new Date().toISOString();
+    U.durSet('hw_outbox', [...rawOutbox(), { kind: 'session', id: other.id, owner: other.owner, queued_at: new Date().toISOString(), ...sessionPayload(other, 'completed') }]);
+    U.durSet('hw_session', null);
+  }
+  const f0 = Geo.last && Date.now() - Geo.last.t < 30000 ? Geo.last : null;   // start instantly; the position is refined below
   const s = {
-    id: U.uid(), survey_type: type, title: $('s-title')?.value.trim() || '', observers: Math.max(1, +$('s-obs')?.value || 1), weather: $('s-weather')?.value || '',
-    status: 'active', started_at: new Date(Date.now() + startOffset * 60000).toISOString(), paused_ms: 0, paused_at: null, track_on: $('s-track') ? $('s-track').checked : true,
-    lat: f?.lat ?? null, lng: f?.lng ?? null, start_accuracy_m: f ? Math.round(f.acc) : null, start_elevation_m: elev(f), location_name: '', ...r,
+    id: U.uid(), owner: ownerId(), survey_type: type || U.lsGet('hw_last_type', 'opportunistic'), title: '', observers: 1, weather: '',
+    status: 'active', started_at: new Date().toISOString(), paused_ms: 0, paused_at: null, track_on: true,
+    lat: f0 ? +f0.lat.toFixed(6) : null, lng: f0 ? +f0.lng.toFixed(6) : null, start_accuracy_m: f0 ? Math.round(f0.acc) : null, start_elevation_m: elev(f0), location_name: '', ...(await placeOf(f0)),
     track: [], points: [], observations: [], removed: [],
   };
-  if (f && s.track_on && f.acc <= 100) { s.track.push([+f.lat.toFixed(6), +f.lng.toFixed(6)]); s.points.push({ t: new Date(f.t).toISOString(), lat: f.lat, lng: f.lng, accuracy_m: Math.round(f.acc), elevation_m: elev(f) }); }
   saveSES(s);
   toast('Session started. Good herping!');
   renderRecord();
-  if (f) U.placeName(f.lat, f.lng).then((n) => { const x = SES(); if (n && x && x.id === s.id && !x.location_name) { x.location_name = n; saveSES(x); if (S.view === 'record') renderRecord(); } });
+  const f = await Geo.best(15, 10000);
+  const x = SES(); if (!f || !x || x.id !== s.id) return;
+  if (x.start_accuracy_m == null || f.acc < x.start_accuracy_m) { Object.assign(x, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), start_accuracy_m: Math.round(f.acc), start_elevation_m: elev(f) }, await placeOf(f)); saveSES(x); loadLikely(x, true); }
+  U.placeName(f.lat, f.lng).then((n) => { const y = SES(); if (n && y && y.id === s.id && !y.location_name) { y.location_name = n; saveSES(y); if ($('r-locname')) $('r-locname').textContent = n; } });
 }
 function sessionPayload(s, status) {
   const end = s.ended_at || new Date().toISOString();
@@ -679,7 +686,8 @@ function renderReview() {
     ${s.title ? `<p class="muted">${esc(s.title)}</p>` : ''}
     <button class="rv-loc ${s.lat == null ? 'warn' : ''}" id="rv-loc">${s.lat == null ? `<span class="grow">Choose location</span>${I('triangle-alert')}` : `${I('map-pin')}<span class="grow">${esc(where || `${(+s.lat).toFixed(4)}, ${(+s.lng).toFixed(4)}`)}</span>${I('chevron-right')}`}</button>
     <div class="rv-card">
-      <div class="row" style="justify-content:space-between"><select id="rv-type" class="rv-type">${Object.entries(SURVEY_TYPES).map(([k, l]) => `<option value="${k}" ${k === s.survey_type ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <label class="rv-lab">What kind of survey was this?</label>
+      <div class="typechips" id="rv-type">${Object.entries(SURVEY_TYPES).map(([k, l]) => `<button type="button" data-t="${k}" class="${k === s.survey_type ? 'on' : ''}">${I(TYPE_ICON[k])}${esc(l.replace(' observation', '').replace(' survey', ''))}</button>`).join('')}</div>
       <div class="rv-eff">
         <div><label>Observers</label><div class="rv-box"><b id="rv-obs">${s.observers || 1}</b><button id="rv-obsp" aria-label="More observers">${I('plus')}</button></div></div>
         <div><label for="rv-min">Minutes</label><div class="rv-box"><input id="rv-min" type="number" min="0" inputmode="numeric" value="${s.manual_min ?? ''}">${I('timer')}</div></div>
@@ -688,8 +696,7 @@ function renderReview() {
     </div>
     <p style="margin:18px 0 10px">Are you submitting a <b>complete list</b> of the reptiles and amphibians you were able to identify?</p>
     <div class="pillseg" id="rv-comp"><button data-c="1" class="${s.complete ? 'on' : ''}">Yes</button><button data-c="0" class="${s.complete ? '' : 'on'}">No</button></div>
-    <div class="grid2" style="margin-top:14px"><div class="fld" style="margin:0"><label for="rv-wx">Weather</label><select id="rv-wx"><option value="">—</option>${WEATHER.map((w) => `<option ${w === s.weather ? 'selected' : ''}>${w}</option>`).join('')}</select></div>
-      <div class="fld" style="margin:0"><label>GPS track</label><div class="small muted" style="padding-top:10px">${s.points.length} points${s.track_on === false ? ' (off)' : ''}</div></div></div>
+    <div class="fld" style="margin-top:14px"><label for="rv-wx">Weather</label><select id="rv-wx"><option value="">—</option>${WEATHER.map((w) => `<option ${w === s.weather ? 'selected' : ''}>${w}</option>`).join('')}</select></div>
     <button class="rv-comment" id="rv-cm">${I('message-square')} ${s.notes ? esc(s.notes.slice(0, 80)) + (s.notes.length > 80 ? '…' : '') : 'Add comments'}</button>
     <div class="row" style="justify-content:space-between;margin-top:18px"><h2>${list.length} species</h2><button class="ses-ic" id="rv-add" aria-label="Add observation">${I('plus')}</button></div>
     <div class="card" style="margin-top:8px">${list.map((x) => `<button class="obsrow" data-k="${esc(x.k)}"><span class="th"><b class="mono">${x.n}</b></span><span class="grow"><span class="t">${x.o.species_id ? nmHtml(byId(x.o.species_id) || { common: x.o.species_id, sci: '' }) : `<i>${esc(x.o.species_text)}</i>`}</span><br>
@@ -697,7 +704,7 @@ function renderReview() {
     <div class="ses-bar"><button class="ses-ic" id="rv-back" aria-label="Back to recording">${I('chevron-right', 'rot-left')}</button><span class="grow"></span><button class="btn btn-primary ses-stop" id="rv-go">Submit</button></div>
   </div>`;
   const upd = (fn) => { const x = SES(); fn(x); saveSES(x); };
-  $('rv-type').onchange = (e) => upd((x) => (x.survey_type = e.target.value));
+  $('rv-type').onclick = (e) => { const b = e.target.closest('[data-t]'); if (!b) return; upd((x) => (x.survey_type = b.dataset.t)); U.lsSet('hw_last_type', b.dataset.t); $('rv-type').querySelectorAll('[data-t]').forEach((c) => c.classList.toggle('on', c === b)); };
   $('rv-obsp').onclick = () => upd((x) => { x.observers = (x.observers || 1) + 1; $('rv-obs').textContent = x.observers; });
   $('rv-obs').onclick = () => upd((x) => { x.observers = Math.max(1, (x.observers || 1) - 1); $('rv-obs').textContent = x.observers; });
   $('rv-min').onchange = (e) => upd((x) => (x.manual_min = e.target.value === '' ? null : Math.max(0, +e.target.value)));
@@ -792,7 +799,7 @@ async function openObservation(opts = {}) {
   const locked = base && base.review_status === 'verified';
   // position: taken at the moment the form opens (each observation keeps its own time + GPS)
   if (isNew) {
-    const f = await Geo.best(10, 4000);
+    const f = Geo.last && Date.now() - Geo.last.t < 20000 ? Geo.last : null;   // open instantly; the position keeps improving below
     if (f) Object.assign(o, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), accuracy_m: Math.round(f.acc), elevation_m: elev(f) }, await placeOf(f));
     else if (ses) Object.assign(o, { state_code: ses.state_code, district_code: ses.district_code, island_code: ses.island_code, region_code: ses.region_code, location_name: ses.location_name });
     if (ses?.location_name && !o.location_name) o.location_name = ses.location_name;
@@ -805,32 +812,35 @@ async function openObservation(opts = {}) {
     return s ? `<div class="chosen"><span class="grow"><b>${esc(s.common)}</b> <i class="muted">(${esc(s.sci)})</i><br><span class="tiny muted">${esc([GROUPS[s.group], s.order, s.family, s.genus].filter(Boolean).join(' · '))}</span>
         ${s.venom === 'venomous' ? `<br><span class="pill venom" style="margin-top:4px">${I('triangle-alert')} Venomous: do not handle</span>` : ''}</span><button type="button" class="btn btn-ghost btn-sm" id="o-chg">Change</button></div>`
       : `<div class="typeahead"><input id="o-sp" placeholder="Type a common or scientific name…" autocomplete="off" value="${esc(o.species_text || '')}"><div class="ta-list hidden" id="o-ta"></div></div>
-         <p class="tiny muted" style="margin-top:4px">Not sure? Type what you think it is (e.g. “Lycodon sp.” or “unknown frog”) and add photos. A reviewer can help identify it.</p>`;
+         <p class="tiny muted" style="margin-top:4px">Not sure? Type what you think it is and add a photo; a reviewer can help.</p>`;
   };
   openSheet(`<h2>${isNew ? 'New observation' : 'Edit observation'}</h2>
-    <p class="small muted">${ses ? `Part of your ${esc(SURVEY_TYPES[ses.survey_type].toLowerCase())}` : o.trip_id ? 'Part of a session' : 'Standalone observation (no session)'}</p>
-    ${locked ? `<div class="note">${I('badge-check')}<span>This record is <b>verified</b>. Changing the species, count, place or time sends it back for review.</span></div>` : ''}
-    <div class="fld"><label>Species</label><div id="o-spbox">${speciesBlock()}</div></div>
-    <div class="fld"><label>How sure are you?</label>${seg('id_confidence', CONF, o.id_confidence)}</div>
-    <div class="fld"><label>What did you find?</label>${seg('evidence', EVIDENCE, o.evidence)}</div>
-    <div class="grid2"><div class="fld"><label for="o-count">Count</label><div class="cnt"><button type="button" id="o-minus">−</button><input id="o-count" type="number" min="0" value="${+o.count || 1}" style="text-align:center;font-family:var(--mono)"><button type="button" class="plus" id="o-plus">+</button></div></div>
-      <div class="fld"><label for="o-time">Date & time</label><input id="o-time" type="datetime-local" value="${toLocalInput(o.observed_at)}"></div></div>
-    <div class="grid2"><div class="fld"><label for="o-stage">Life stage</label>${sel('o-stage', ['Egg', 'Hatchling', 'Tadpole', 'Juvenile', 'Subadult', 'Adult', 'Unknown'], o.life_stage)}</div>
-      <div class="fld"><label for="o-sex">Sex</label>${sel('o-sex', SEXES, o.sex)}</div></div>
-    <div class="fld"><label>Condition</label>${seg('mortality', MORTALITY, o.mortality)}</div>
-    <div class="fld"><label>Wild or captive?</label>${seg('origin', ORIGIN, o.origin)}</div>
-    <div class="fld"><label>Photos</label><div class="photos" id="o-photos"></div><p class="tiny muted" style="margin-top:4px">Shrunk to ≤1600 px. Stored on this phone until uploaded. Label the view (dorsal, head…) to help reviewers.</p></div>
-    <div class="fld"><label>Location</label><div class="loc" id="o-loc"></div>
-      <details class="more"><summary>Edit position manually</summary><div class="grid2" style="margin-top:6px"><input id="o-lat" inputmode="decimal" placeholder="Latitude" value="${o.lat ?? ''}"><input id="o-lng" inputmode="decimal" placeholder="Longitude" value="${o.lng ?? ''}"></div>
-        <input id="o-place" style="margin-top:6px" placeholder="Place name" value="${esc(o.location_name || '')}"><button type="button" class="btn btn-ghost btn-sm" id="o-regps" style="margin-top:6px">${I('crosshair')} Use current GPS position</button></details></div>
-    <div class="grid2"><div class="fld"><label for="o-hab">Habitat</label>${sel('o-hab', HABITATS, o.habitat)}</div><div class="fld"><label for="o-micro">Microhabitat</label>${sel('o-micro', MICROHABITATS, o.microhabitat)}</div></div>
-    <div class="grid2"><div class="fld"><label for="o-beh">Behaviour</label>${sel('o-beh', BEHAVIOURS, o.behaviour)}</div><div class="fld"><label for="o-act">Activity</label>${sel('o-act', ACTIVITY, o.activity)}</div></div>
-    <div class="grid2"><div class="fld"><label for="o-wx">Weather</label>${sel('o-wx', WEATHER, o.weather)}</div><div class="fld"><label for="o-temp">Temperature °C</label><input id="o-temp" type="number" step="0.1" min="-20" max="60" value="${o.temperature_c ?? ''}"></div></div>
-    <div class="fld"><label for="o-notes">Notes</label><textarea id="o-notes" rows="3" maxlength="4000" placeholder="Size, marks, what it was doing, substrate…">${esc(o.notes || '')}</textarea></div>
-    <div class="fld"><label>Who can see the exact location?</label>${seg('privacy', PRIVACY, o.privacy)}<p class="tiny muted" style="margin-top:4px" id="o-privnote"></p></div>
-    <div class="note">${I('shield')}<span>Never handle an animal to record it. Photos from a safe distance are enough for identification.</span></div>
-    <button class="btn btn-primary btn-block" id="o-save" style="margin-top:14px;min-height:52px">${I('check')} ${isNew ? 'Save observation' : 'Save changes'}</button>
-    ${!isNew && !locked ? `<button class="btn btn-ghost btn-block" id="o-del" style="margin-top:8px;color:var(--red)">${I('trash-2')} Delete observation</button>` : ''}`,
+    ${locked ? `<div class="note">${I('badge-check')}<span>Verified record: changing species, count, place or time sends it back for review.</span></div>` : ''}
+    <div class="fld"><label>What did you see?</label><div id="o-spbox">${speciesBlock()}</div></div>
+    <div class="obs-row2">
+      <div class="fld"><label for="o-count">How many?</label><div class="cnt big"><button type="button" id="o-minus" aria-label="One less">−</button><input id="o-count" type="number" min="0" inputmode="numeric" value="${+o.count || 1}"><button type="button" class="plus" id="o-plus" aria-label="One more">+</button></div></div>
+      <div class="fld"><label>Photos</label><div class="photos" id="o-photos"></div></div>
+    </div>
+    <div class="fld"><label for="o-notes">Notes</label><textarea id="o-notes" rows="2" maxlength="4000" placeholder="Optional: size, marks, what it was doing…">${esc(o.notes || '')}</textarea></div>
+    <div class="loc" id="o-loc"></div>
+    <details class="more obs-more"><summary>More details <span class="muted">(optional)</span></summary>
+      <div class="fld"><label>How sure are you?</label>${seg('id_confidence', CONF, o.id_confidence)}</div>
+      <div class="fld"><label>What did you find?</label>${seg('evidence', EVIDENCE, o.evidence)}</div>
+      <div class="grid2"><div class="fld"><label for="o-stage">Life stage</label>${sel('o-stage', ['Egg', 'Hatchling', 'Tadpole', 'Juvenile', 'Subadult', 'Adult', 'Unknown'], o.life_stage)}</div>
+        <div class="fld"><label for="o-sex">Sex</label>${sel('o-sex', SEXES, o.sex)}</div></div>
+      <div class="fld"><label>Condition</label>${seg('mortality', MORTALITY, o.mortality)}</div>
+      <div class="fld"><label>Wild or captive?</label>${seg('origin', ORIGIN, o.origin)}</div>
+      <div class="grid2"><div class="fld"><label for="o-hab">Habitat</label>${sel('o-hab', HABITATS, o.habitat)}</div><div class="fld"><label for="o-micro">Microhabitat</label>${sel('o-micro', MICROHABITATS, o.microhabitat)}</div></div>
+      <div class="grid2"><div class="fld"><label for="o-beh">Behaviour</label>${sel('o-beh', BEHAVIOURS, o.behaviour)}</div><div class="fld"><label for="o-act">Activity</label>${sel('o-act', ACTIVITY, o.activity)}</div></div>
+      <div class="grid2"><div class="fld"><label for="o-wx">Weather</label>${sel('o-wx', WEATHER, o.weather)}</div><div class="fld"><label for="o-temp">Temperature °C</label><input id="o-temp" type="number" step="0.1" min="-20" max="60" value="${o.temperature_c ?? ''}"></div></div>
+      <div class="fld"><label for="o-time">Date & time</label><input id="o-time" type="datetime-local" value="${toLocalInput(o.observed_at)}"></div>
+      <div class="fld"><label>Position</label><div class="grid2"><input id="o-lat" inputmode="decimal" placeholder="Latitude" value="${o.lat ?? ''}"><input id="o-lng" inputmode="decimal" placeholder="Longitude" value="${o.lng ?? ''}"></div>
+        <input id="o-place" style="margin-top:6px" placeholder="Place name" value="${esc(o.location_name || '')}"><button type="button" class="btn btn-ghost btn-sm" id="o-regps" style="margin-top:6px">${I('crosshair')} Use current GPS</button></div>
+      <div class="fld"><label>Who can see the exact location?</label>${seg('privacy', PRIVACY, o.privacy)}<p class="tiny muted" style="margin-top:4px" id="o-privnote"></p></div>
+    </details>
+    <button class="btn btn-primary btn-block" id="o-save" style="margin-top:16px;min-height:54px;font-size:16px">${I('check')} ${isNew ? 'Save' : 'Save changes'}</button>
+    ${!isNew && !locked ? `<button class="btn btn-ghost btn-block" id="o-del" style="margin-top:8px;color:var(--red)">${I('trash-2')} Delete</button>` : ''}
+    <p class="tiny muted" style="text-align:center;margin-top:10px">Never handle an animal to record it. A photo from a safe distance is enough.</p>`,
   () => { for (const u of blobUrls.values()) URL.revokeObjectURL(u); blobUrls.clear(); });
 
   const body = $('sheetbody');
@@ -869,8 +879,8 @@ async function openObservation(opts = {}) {
   $('o-plus').onclick = () => { $('o-count').value = (+$('o-count').value || 0) + 1; };
   const paintLoc = () => {
     $('o-loc').innerHTML = o.lat != null
-      ? `${I('map-pin')}<span><b>${(+o.lat).toFixed(5)}, ${(+o.lng).toFixed(5)}</b>${o.accuracy_m != null ? ` <span class="acc ${o.accuracy_m <= 10 ? 'good' : o.accuracy_m <= 30 ? 'ok' : 'poor'}">±${o.accuracy_m} m</span>` : ''}${o.elevation_m != null ? ` · ${o.elevation_m} m elev.` : ''}<br>${esc([o.location_name, regionName(o.island_code), regionName(o.district_code), regionName(o.state_code)].filter(Boolean).join(' · ') || '')}</span>`
-      : `${I('triangle-alert')}<span>No GPS position. Enable location, or enter it manually below.</span>`;
+      ? `${I('map-pin')}<span class="grow"><b>${esc(o.location_name || regionName(o.island_code || o.district_code || o.state_code) || 'Location saved')}</b><br><span class="tiny muted">${(+o.lat).toFixed(5)}, ${(+o.lng).toFixed(5)}${o.elevation_m != null ? ` · ${o.elevation_m} m` : ''}</span></span>${o.accuracy_m != null ? `<span class="acc ${o.accuracy_m <= 10 ? 'good' : o.accuracy_m <= 30 ? 'ok' : 'poor'}">±${o.accuracy_m} m</span>` : ''}`
+      : `${I('locate-fixed')}<span>Getting GPS position…</span>`;
   };
   paintLoc();
   // keep improving the position for the first minute while the form is open (unless edited by hand)
@@ -878,7 +888,11 @@ async function openObservation(opts = {}) {
     const opened = Date.now();
     const better = (f) => {
       if (!f || o._manual || Date.now() - opened > 60000 || !$('o-loc')) return Geo.stop(better);
-      if (o.accuracy_m == null || f.acc < o.accuracy_m - 1) { Object.assign(o, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), accuracy_m: Math.round(f.acc), elevation_m: elev(f) }); $('o-lat').value = o.lat; $('o-lng').value = o.lng; paintLoc(); }
+      if (o.accuracy_m == null || f.acc < o.accuracy_m - 1) {
+        const first = o.lat == null;
+        Object.assign(o, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), accuracy_m: Math.round(f.acc), elevation_m: elev(f) }); $('o-lat').value = o.lat; $('o-lng').value = o.lng; paintLoc();
+        if (first || !o.state_code) placeOf(f).then((r) => { Object.assign(o, r); paintLoc(); if (!o.location_name) U.placeName(f.lat, f.lng).then((n) => { if (n && !o.location_name && $('o-loc')) { o.location_name = n; $('o-place').value = n; paintLoc(); } }); });
+      }
     };
     Geo.start(better);
   }
@@ -928,6 +942,11 @@ async function openObservation(opts = {}) {
       habitat: $('o-hab').value, microhabitat: $('o-micro').value, behaviour: $('o-beh').value, activity: $('o-act').value, weather: $('o-wx').value,
       temperature_c: $('o-temp').value === '' ? null : +$('o-temp').value, notes: $('o-notes').value.trim(), location_name: $('o-place').value.trim() || o.location_name,
     });
+    if (o.lat == null) {   // GPS hadn't answered yet: use the last fix, else the session start
+      const g = Geo.last && Date.now() - Geo.last.t < 120000 ? Geo.last : null;
+      if (g) Object.assign(o, { lat: +g.lat.toFixed(6), lng: +g.lng.toFixed(6), accuracy_m: Math.round(g.acc), elevation_m: elev(g) }, await placeOf(g));
+      else if (ses && ses.lat != null) Object.assign(o, { lat: ses.lat, lng: ses.lng, accuracy_m: ses.start_accuracy_m, state_code: ses.state_code, district_code: ses.district_code, island_code: ses.island_code });
+    }
     if (!o.region_code) o.region_code = o.state_code || null;
     const clean = cleanObs(o);
     if (ses) {

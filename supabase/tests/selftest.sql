@@ -125,6 +125,14 @@ begin
     exception when others then r := r || jsonb_build_object('a','3 field user','t','impossible coordinates are rejected','ok', true,'d', sqlerrm); end;
     select count(*) into n from public.trips where user_id = AD;
     r := r || jsonb_build_object('a','3 field user','t','cannot see other people''s checklists','ok', n = 0,'d', n || ' visible');
+    select count(*) into n from public.profiles where id <> F;
+    r := r || jsonb_build_object('a','3 field user','t','cannot see anyone else''s profile (e-mail, phone, name)','ok', n = 0,'d', n || ' visible');
+    select (select count(*) from public.sightings where user_id <> F) + (select count(*) from public.track_points where user_id <> F) + (select count(*) from public.photos where user_id <> F) into n;
+    r := r || jsonb_build_object('a','3 field user','t','cannot see anyone else''s observations, GPS tracks or photos','ok', n = 0,'d', n || ' visible');
+    begin
+      insert into public.trips (id, user_id, started_at) values (gen_random_uuid(), AD, now());
+      r := r || jsonb_build_object('a','3 field user','t','cannot save a record under someone else''s name','ok', false,'d', 'insert succeeded');
+    exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot save a record under someone else''s name','ok', true,'d', sqlerrm); end;
     insert into public.roadkill_surveys (id, user_id, region_code, mode, road_name, road_type, started_at, ended_at, distance_km, track)
     values (RS, F, g_region, 'car', 'Test Road', 'highway', now() - interval '3 hours', now() - interval '2 hours', 12.5, '[[11.6,92.7],[11.7,92.75]]');
     insert into public.roadkill_records (id, survey_id, user_id, species_id, pack, count, lat, lng, region_code, condition)
@@ -254,6 +262,13 @@ begin
     exception when others then r := r || jsonb_build_object('a','7 reviewer','t','rejections must explain why','ok', true,'d', sqlerrm); end;
     select count(*) into n from public.sightings where id = '00000000-0000-4000-8000-0000000b0009';
     r := r || jsonb_build_object('a','7 reviewer','t','reviewers can see private observations to verify them','ok', n = 1,'d', '');
+    begin
+      update public.sightings set user_id = RV where id = S1;
+      r := r || jsonb_build_object('a','7 reviewer','t','nobody can move a record to another account','ok', false,'d', 'owner changed');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','nobody can move a record to another account','ok', true,'d', sqlerrm); end;
+    delete from public.sightings where id = '00000000-0000-4000-8000-0000000b0009';
+    get diagnostics n = row_count;
+    r := r || jsonb_build_object('a','7 reviewer','t','reviewers cannot delete observers'' records (Admin only)','ok', n = 0,'d', n || ' deleted');
     if extra_sp is not null then
       insert into public.checklist (region_code, species_id, status) values (g_region, extra_sp, 'native') on conflict (region_code, species_id) do update set status = excluded.status;
       r := r || jsonb_build_object('a','7 reviewer','t','can add species to a regional checklist','ok', true,'d', extra_sp);

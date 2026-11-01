@@ -28,5 +28,7 @@ export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss(), sharedLegacyFiles()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
-  build: { outDir: "dist", chunkSizeWarningLimit: 1500 },
+  // Built output is committed at ../dashboard so GitHub Pages works in both
+  // "Deploy from a branch" and "GitHub Actions" modes.
+  build: { outDir: "../dashboard", emptyOutDir: true, chunkSizeWarningLimit: 1500 },
 });

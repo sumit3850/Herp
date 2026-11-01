@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm, cache-dependency-path: dashboard/package-lock.json }
+        with: { node-version: 22, cache: npm, cache-dependency-path: dashboard-app/package-lock.json }
       - run: bash scripts/build-site.sh
       - uses: actions/upload-pages-artifact@v3
         with: { path: _site }

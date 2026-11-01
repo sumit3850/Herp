@@ -59,7 +59,7 @@ The website, field app and dashboard share one look:
 - **Thumbnails:** species without a photo show a specimen-label monogram (e.g. *Nn* for *Naja naja*) on the group colour.
 - **Hero:** `assets/hero-herp.svg` is a topographic-contour illustration. Replace it with a licensed field photograph if you prefer.
 
-## Admin dashboard (`dashboard/`)
+## Admin dashboard (source `dashboard-app/`, built into `dashboard/`)
 
 An EST-style operations dashboard built on the shadcn **App1** layout: a collapsible sidebar, KPI cards, area charts and activity feeds. It works in light and dark mode, uses a slide-in sidebar on phones, and animates between pages.
 
@@ -85,7 +85,7 @@ An EST-style operations dashboard built on the shadcn **App1** layout: a collaps
 - **Reviewers** (`role = 'reviewer'`) see only Overview, Submissions, Road-kill, Map, Checklists (read-only) and Report. Field accounts get a "no access" screen.
 
 ```bash
-cd dashboard
+cd dashboard-app
 ```
 ```bash
 npm install
@@ -93,12 +93,12 @@ npm install
 ```bash
 npm run dev
 ```
-Open the URL Vite prints. The dashboard reads the shared `../config.js`, `../common.js` and `../data/seed.js`, so it uses the same data as the field app. With an empty `SUPABASE_URL` it runs in demo mode (`admin@demo / admin`, reviewer `anu@demo / anu`).
+Open the URL Vite prints. After changing the dashboard, run `npm run build`. It writes the production build into `../dashboard/`, which is committed so GitHub Pages works in either deploy mode. The dashboard reads the shared `../config.js`, `../common.js` and `../data/seed.js`, so it uses the same data as the field app. With an empty `SUPABASE_URL` it runs in demo mode (`admin@demo / admin`, reviewer `anu@demo / anu`).
 
 `bash scripts/build-site.sh` builds everything into `_site/`. On every push to `main`, `.github/workflows/pages.yml` publishes it to GitHub Pages (set Settings → Pages → Source to **GitHub Actions** once).
 
 ### shadcn/ui structure
-`dashboard/` is a standard shadcn project: `components.json`, the `@/*` path alias, Tailwind v4 with CSS variables in `src/index.css`, and components in **`src/components/ui`**. That folder matters because the shadcn CLI (`npx shadcn@latest add <component>`) and every shadcn component import from `@/components/ui/...`. Keeping that path means new components from the CLI or 21st.dev drop in without editing imports. `App1` (with its `app-1-utils/` sidebar, data and nav) and `SignInPage` live there unchanged; HerpWatch screens are in `src/pages/`.
+`dashboard-app/` is a standard shadcn project: `components.json`, the `@/*` path alias, Tailwind v4 with CSS variables in `src/index.css`, and components in **`src/components/ui`**. That folder matters because the shadcn CLI (`npx shadcn@latest add <component>`) and every shadcn component import from `@/components/ui/...`. Keeping that path means new components from the CLI or 21st.dev drop in without editing imports. `App1` (with its `app-1-utils/` sidebar, data and nav) and `SignInPage` live there unchanged; HerpWatch screens are in `src/pages/`.
 
 ## Architecture
 
@@ -115,7 +115,8 @@ common.js        HW.api: one data API with two back-ends (Supabase | localStorag
 data/seed.js     species catalogue, regions, packs, default prices (single source of truth)
 style.css        shared design tokens, with light and dark modes
 app.html         field app        index.html  website + report     admin.html → dashboard/
-dashboard/       React + TS + Tailwind + shadcn admin dashboard (Vite)
+dashboard-app/   React + TS + Tailwind + shadcn admin dashboard source (Vite)
+dashboard/       its committed production build (served at /dashboard/)
 sw.js            offline cache (app shell + map tiles)
 supabase/schema.sql                       tables, RLS, views, RPCs, storage buckets
 supabase/seed.sql                         generated: node scripts/build-seed.mjs

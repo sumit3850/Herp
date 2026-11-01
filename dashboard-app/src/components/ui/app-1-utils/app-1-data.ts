@@ -1,5 +1,8 @@
 import {
   BarChart3,
+  GitPullRequest,
+  Globe2,
+  Settings,
   BookOpen,
   ClipboardCheck,
   Inbox,
@@ -16,21 +19,24 @@ import {
 import type { ChartConfig } from "@/components/ui/chart";
 
 /* Navigation shared by the App1 demo and the live HerpWatch dashboard. */
-export type NavId = "overview" | "submissions" | "checklists" | "species" | "roadkill" | "users" | "packs" | "map" | "reports" | "audit" | "feedback";
+export type NavId = "overview" | "submissions" | "checklists" | "species" | "roadkill" | "users" | "packs" | "map" | "reports" | "audit" | "feedback" | "proposals" | "regions" | "settings";
 export const app1Nav: { group: string; items: { id: NavId; label: string; icon: LucideIcon }[] }[] = [
   { group: "Monitor", items: [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
-    { id: "submissions", label: "Submissions", icon: Inbox },
+    { id: "submissions", label: "Observations", icon: Inbox },
     { id: "roadkill", label: "Road-kill", icon: Route },
     { id: "map", label: "Map", icon: Map },
     { id: "feedback", label: "Feedback", icon: MessageSquare },
   ] },
   { group: "Manage", items: [
-    { id: "checklists", label: "Core checklists", icon: ClipboardCheck },
+    { id: "checklists", label: "Checklists", icon: ClipboardCheck },
     { id: "species", label: "Species", icon: BookOpen },
+    { id: "proposals", label: "Proposals", icon: GitPullRequest },
+    { id: "regions", label: "Regions", icon: Globe2 },
     { id: "users", label: "Users", icon: Users },
     { id: "packs", label: "Packs & pricing", icon: Wallet },
     { id: "audit", label: "Audit log", icon: History },
+    { id: "settings", label: "Settings", icon: Settings },
   ] },
   { group: "Share", items: [{ id: "reports", label: "Public report", icon: BarChart3 }] },
 ];

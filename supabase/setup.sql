@@ -557,6 +557,491 @@ create index if not exists rk_surveys_user_idx         on public.roadkill_survey
 create index if not exists entitlements_lookup_idx     on public.entitlements(user_id, pack_id, region_code);
 create index if not exists checklist_region_idx        on public.checklist(region_code);
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- v4 · scientific herping platform (idempotent upgrade)
+--   regions hierarchy · taxonomy · herping sessions + GPS track points ·
+--   rich observations · photos · review history (original ID never lost) ·
+--   reviewer submissions · platform settings · privacy
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- regions: country → state/UT → district → island / region / protected area
+alter table public.regions add column if not exists kind text not null default 'state';
+alter table public.regions add column if not exists lat double precision;
+alter table public.regions add column if not exists lng double precision;
+alter table public.regions add column if not exists sort int not null default 0;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'regions_kind_ok') then
+    alter table public.regions add constraint regions_kind_ok check (kind in ('country','state','ut','district','island','region','protected_area'));
+  end if;
+end $$;
+
+-- taxonomy ------------------------------------------------------------------------
+alter table public.species add column if not exists order_name  text not null default '';
+alter table public.species add column if not exists genus       text not null default '';
+alter table public.species add column if not exists taxon_group text not null default '';  -- snake, lizard, gecko, skink, agama, monitor, chameleon, turtle, tortoise, crocodilian, frog, toad, caecilian
+alter table public.species add column if not exists authority   text not null default '';
+alter table public.species add column if not exists refs        text not null default '';  -- taxonomic references / sources
+create index if not exists species_family_idx on public.species(family);
+create index if not exists species_group_idx  on public.species(taxon_group);
+
+-- platform settings (admin) ----------------------------------------------------------
+create table if not exists public.platform_settings (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.platform_settings enable row level security;
+drop policy if exists "settings: read" on public.platform_settings;
+create policy "settings: read" on public.platform_settings for select using (true);
+insert into public.platform_settings (key, value) values
+  ('require_packs', 'true'),            -- false = every signed-in user sees full species pages
+  ('default_privacy', '"public"'),      -- public | restricted | private
+  ('sensitive_blur_decimals', '1')      -- 1 ≈ 10 km for sensitive species on public maps
+on conflict (key) do nothing;
+create or replace function public.setting(p_key text) returns jsonb
+language sql security definer stable set search_path = public as $$
+  select value from public.platform_settings where key = p_key;
+$$;
+
+-- paid packs can be switched off by the admin
+create or replace function public.can_view_species(p_species text) returns boolean
+language sql security definer stable set search_path = public as $$
+  select public.is_admin() or public.is_reviewer()
+    or (auth.uid() is not null and coalesce(public.setting('require_packs'), 'true'::jsonb) = 'false'::jsonb)
+    or exists (
+      select 1 from public.species s
+      join public.entitlements e on e.pack_id = s.pack_id
+      join public.checklist c    on c.species_id = s.id and c.region_code = e.region_code
+      where s.id = p_species and e.user_id = auth.uid()
+        and e.valid_from <= now() and (e.valid_until is null or e.valid_until > now()));
+$$;
+
+-- herping sessions (the trips table) -------------------------------------------------
+alter table public.trips add column if not exists survey_type   text not null default 'opportunistic';
+alter table public.trips add column if not exists title         text not null default '';
+alter table public.trips add column if not exists status        text not null default 'completed';
+alter table public.trips add column if not exists paused_min    numeric(8,1) not null default 0;
+alter table public.trips add column if not exists start_accuracy_m real;
+alter table public.trips add column if not exists start_elevation_m real;
+alter table public.trips add column if not exists end_lat       double precision;
+alter table public.trips add column if not exists end_lng       double precision;
+alter table public.trips add column if not exists location_name text not null default '';
+alter table public.trips add column if not exists state_code    text references public.regions(code);
+alter table public.trips add column if not exists district_code text references public.regions(code);
+alter table public.trips add column if not exists island_code   text references public.regions(code);
+alter table public.trips add column if not exists weather       text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'trips_survey_type_ok') then
+    alter table public.trips add constraint trips_survey_type_ok check (survey_type in
+      ('day','night','road','transect','habitat','opportunistic','creek_mangrove','stream_wetland'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'trips_status_ok') then
+    alter table public.trips add constraint trips_status_ok check (status in ('active','paused','completed'));
+  end if;
+end $$;
+update public.trips set survey_type = case protocol when 'night_walk' then 'night' when 'traveling' then 'transect' when 'area' then 'habitat' else survey_type end
+ where survey_type = 'opportunistic' and protocol in ('night_walk','traveling','area');
+
+-- GPS track points of a session (one row per fix) --------------------------------------
+create table if not exists public.track_points (
+  session_id uuid not null references public.trips(id) on delete cascade,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  t          timestamptz not null,
+  lat        double precision not null check (lat between -90 and 90),
+  lng        double precision not null check (lng between -180 and 180),
+  accuracy_m real,
+  elevation_m real,
+  primary key (session_id, t)
+);
+alter table public.track_points enable row level security;
+drop policy if exists "own rows" on public.track_points;
+create policy "own rows" on public.track_points for all using (user_id = auth.uid()) with check (user_id = auth.uid() and public.is_active());
+drop policy if exists "staff rows" on public.track_points;
+create policy "staff rows" on public.track_points for select using (public.is_reviewer());
+
+-- observations (the sightings table) ---------------------------------------------------
+alter table public.sightings add column if not exists original_species_id   text;
+alter table public.sightings add column if not exists original_species_text text;
+alter table public.sightings add column if not exists id_confidence text not null default 'certain';
+alter table public.sightings add column if not exists evidence      text not null default 'direct';
+alter table public.sightings add column if not exists mortality     text not null default '';    -- '' | roadkill | predation | other
+alter table public.sightings add column if not exists origin        text not null default 'wild';
+alter table public.sightings add column if not exists habitat       text not null default '';
+alter table public.sightings add column if not exists microhabitat  text not null default '';
+alter table public.sightings add column if not exists behaviour     text not null default '';
+alter table public.sightings add column if not exists activity      text not null default '';
+alter table public.sightings add column if not exists weather       text not null default '';
+alter table public.sightings add column if not exists temperature_c numeric(4,1);
+alter table public.sightings add column if not exists elevation_m   real;
+alter table public.sightings add column if not exists location_name text not null default '';
+alter table public.sightings add column if not exists state_code    text references public.regions(code);
+alter table public.sightings add column if not exists district_code text references public.regions(code);
+alter table public.sightings add column if not exists island_code   text references public.regions(code);
+alter table public.sightings add column if not exists privacy       text not null default 'public';
+alter table public.sightings add column if not exists duplicate_of  uuid references public.sightings(id) on delete set null;
+update public.sightings set original_species_id = species_id, original_species_text = species_text where original_species_id is null and original_species_text is null;
+do $$
+declare c record;
+begin
+  for c in select * from (values
+    ('sightings_confidence_ok', 'id_confidence in (''certain'',''probable'',''possible'')'),
+    ('sightings_evidence_ok',   'evidence in (''direct'',''shed_skin'',''eggs'',''tracks'',''call'',''remains'',''photo_only'')'),
+    ('sightings_origin_ok',     'origin in (''wild'',''captive'',''released'',''unknown'')'),
+    ('sightings_privacy_ok',    'privacy in (''public'',''restricted'',''private'')'),
+    ('sightings_temp_ok',       'temperature_c is null or temperature_c between -20 and 60')
+  ) v(name, expr) loop
+    if not exists (select 1 from pg_constraint where conname = c.name) then
+      execute format('alter table public.sightings add constraint %I check (%s)', c.name, c.expr);
+    end if;
+  end loop;
+  -- verification statuses: pending · verified · needs_id · more_info · rejected
+  if exists (select 1 from pg_constraint where conname = 'sightings_review_status_check') then
+    alter table public.sightings drop constraint sightings_review_status_check;
+  end if;
+  update public.sightings set review_status = 'verified' where review_status = 'accepted';
+  if not exists (select 1 from pg_constraint where conname = 'sightings_review_status_ok') then
+    alter table public.sightings add constraint sightings_review_status_ok check (review_status in ('pending','verified','needs_id','more_info','rejected'));
+  end if;
+end $$;
+create index if not exists sightings_user_time_idx on public.sightings(user_id, observed_at desc);
+create index if not exists sightings_state_idx  on public.sightings(state_code);
+create index if not exists sightings_island_idx on public.sightings(island_code);
+
+-- original identification is immutable; observer edits only re-open review when something real changed
+create or replace function public.guard_review() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.original_species_id := new.species_id;
+    new.original_species_text := coalesce(new.species_text, '');
+    if auth.uid() is not null then new.review_status := 'pending'; new.reviewed_by := null; new.reviewed_at := null; end if;   -- every new record starts in review
+    return new;
+  end if;
+  new.original_species_id := old.original_species_id;
+  new.original_species_text := old.original_species_text;
+  if not public.is_reviewer() then
+    new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at; new.review_note := old.review_note; new.duplicate_of := old.duplicate_of;
+    if (new.species_id, new.species_text, new.count, new.lat, new.lng, new.observed_at, new.evidence, new.life_stage, new.id_confidence)
+       is distinct from (old.species_id, old.species_text, old.count, old.lat, old.lng, old.observed_at, old.evidence, old.life_stage, old.id_confidence) then
+      new.review_status := 'pending';
+    else
+      new.review_status := old.review_status;     -- re-syncing an unchanged record never undoes a verification
+    end if;
+  elsif new.review_status is distinct from old.review_status then
+    new.reviewed_by := case when new.review_status = 'pending' then null else auth.uid() end;
+    new.reviewed_at := case when new.review_status = 'pending' then null else now() end;
+  end if;
+  return new;
+end $$;
+
+-- verified records are kept (data retention); observers may delete anything else
+create or replace function public.guard_sighting_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.review_status = 'verified' and not public.is_reviewer() then
+    raise exception 'Verified observations are kept for scientific integrity. Ask a reviewer if it must be removed.' using errcode = '42501';
+  end if;
+  return old;
+end $$;
+drop trigger if exists guard_sighting_delete on public.sightings;
+create trigger guard_sighting_delete before delete on public.sightings for each row execute function public.guard_sighting_delete();
+
+-- photographs ---------------------------------------------------------------------------
+create table if not exists public.photos (
+  id           uuid primary key,                         -- generated on the device (offline-safe)
+  sighting_id  uuid not null references public.sightings(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  url          text not null,
+  storage_path text not null default '',
+  feature      text not null default '',                 -- dorsal, ventral, head, lateral, habitat, other
+  taken_at     timestamptz,
+  width        int, height int,
+  size_bytes   int,
+  lat double precision, lng double precision,
+  is_reference boolean not null default false,
+  created_at   timestamptz not null default now()
+);
+create index if not exists photos_sighting_idx on public.photos(sighting_id);
+alter table public.photos enable row level security;
+drop policy if exists "own rows" on public.photos;
+create policy "own rows" on public.photos for all using (user_id = auth.uid()) with check (user_id = auth.uid() and public.is_active());
+drop policy if exists "staff rows" on public.photos;
+create policy "staff rows" on public.photos for all using (public.is_reviewer()) with check (public.is_reviewer());
+
+-- review history: append-only, every verification step and identification change ----------
+create table if not exists public.observation_reviews (
+  id              bigserial primary key,
+  sighting_id     uuid not null references public.sightings(id) on delete cascade,
+  reviewer_id     uuid references auth.users(id) on delete set null,
+  reviewer_name   text not null default '',
+  action          text not null check (action in ('verify','reject','needs_id','more_info','suggest_id','reidentify','duplicate','comment','reopen')),
+  from_species_id text,
+  to_species_id   text,
+  status_after    text,
+  comment         text not null default '' check (length(comment) <= 2000),
+  created_at      timestamptz not null default now()
+);
+create index if not exists obs_reviews_sighting_idx on public.observation_reviews(sighting_id, created_at);
+alter table public.observation_reviews enable row level security;
+drop policy if exists "reviews: read" on public.observation_reviews;
+create policy "reviews: read" on public.observation_reviews for select
+  using (public.is_reviewer() or exists (select 1 from public.sightings s where s.id = sighting_id and s.user_id = auth.uid()));
+-- no insert/update/delete policies: rows are written only by review_observation()
+
+create or replace function public.review_observation(p_sighting uuid, p_action text, p_species text default null, p_comment text default '', p_duplicate_of uuid default null)
+returns public.sightings language plpgsql security definer set search_path = public as $$
+declare s public.sightings; new_status text; nm text;
+begin
+  select * into s from public.sightings where id = p_sighting;
+  if s.id is null then raise exception 'observation not found'; end if;
+  if p_action = 'comment' then
+    if not (public.is_reviewer() or s.user_id = auth.uid()) then raise exception 'not allowed'; end if;
+  elsif not public.is_reviewer() then
+    raise exception 'reviewers only' using errcode = '42501';
+  end if;
+  if p_action in ('suggest_id','reidentify') and (p_species is null or not exists (select 1 from public.species where id = p_species)) then
+    raise exception 'choose a species from the catalogue';
+  end if;
+  if p_action in ('reject','more_info','needs_id','suggest_id','duplicate') and coalesce(trim(p_comment), '') = '' and p_action <> 'duplicate' then
+    raise exception 'please add a comment for the observer';
+  end if;
+  new_status := case p_action
+    when 'verify' then 'verified' when 'reidentify' then 'verified' when 'reject' then 'rejected'
+    when 'duplicate' then 'rejected' when 'needs_id' then 'needs_id' when 'suggest_id' then 'needs_id'
+    when 'more_info' then 'more_info' when 'reopen' then 'pending' else s.review_status end;
+  select username into nm from public.profiles where id = auth.uid();
+  insert into public.observation_reviews (sighting_id, reviewer_id, reviewer_name, action, from_species_id, to_species_id, status_after, comment)
+  values (s.id, auth.uid(), coalesce(nm, ''), p_action, s.species_id, case when p_action in ('suggest_id','reidentify') then p_species end, new_status, coalesce(p_comment, ''));
+  if p_action <> 'comment' then
+    update public.sightings set
+      review_status = new_status,
+      species_id = case when p_action = 'reidentify' then p_species else species_id end,
+      review_note = case when coalesce(p_comment, '') <> '' then p_comment else review_note end,
+      duplicate_of = case when p_action = 'duplicate' then p_duplicate_of else duplicate_of end
+    where id = s.id returning * into s;
+  end if;
+  return s;
+end $$;
+revoke all on function public.review_observation(uuid, text, text, text, uuid) from public, anon;
+grant execute on function public.review_observation(uuid, text, text, text, uuid) to authenticated;
+
+-- reviewer submissions (proposals the Admin approves) ------------------------------------
+create table if not exists public.reviewer_submissions (
+  id            uuid primary key default gen_random_uuid(),
+  submitted_by  uuid not null references auth.users(id) on delete cascade,
+  kind          text not null check (kind in ('new_species','species_update','regional_checklist','checklist_change','reference_photo')),
+  region_code   text references public.regions(code) on delete set null,
+  species_id    text references public.species(id) on delete set null,
+  payload       jsonb not null default '{}',
+  note          text not null default '' check (length(note) <= 2000),
+  refs          text not null default '' check (length(refs) <= 2000),
+  status        text not null default 'pending' check (status in ('pending','approved','rejected')),
+  decided_by    uuid references auth.users(id) on delete set null,
+  decided_at    timestamptz,
+  decision_note text not null default '',
+  created_at    timestamptz not null default now()
+);
+alter table public.reviewer_submissions enable row level security;
+drop policy if exists "subs: reviewer" on public.reviewer_submissions;
+create policy "subs: reviewer" on public.reviewer_submissions for select using (submitted_by = auth.uid() or public.is_admin());
+drop policy if exists "subs: submit" on public.reviewer_submissions;
+create policy "subs: submit" on public.reviewer_submissions for insert with check (submitted_by = auth.uid() and public.is_reviewer() and status = 'pending');
+drop policy if exists "subs: admin" on public.reviewer_submissions;
+create policy "subs: admin" on public.reviewer_submissions for update using (public.is_admin()) with check (public.is_admin());
+
+-- Admin approves (and applies) or rejects a submission
+create or replace function public.decide_submission(p_id uuid, p_approve boolean, p_note text default '')
+returns public.reviewer_submissions language plpgsql security definer set search_path = public as $$
+declare r public.reviewer_submissions; sp jsonb; e jsonb;
+  allowed text[] := array['common_name','scientific_name','family','genus','order_name','taxon_group','authority','refs','iucn','endemic','sensitive','venom','toxic','habitat','distribution','id_notes','behaviour','similar_species','size','images','pack_id'];
+  k text; sets text := '';
+begin
+  if not public.is_admin() then raise exception 'admin only' using errcode = '42501'; end if;
+  select * into r from public.reviewer_submissions where id = p_id and status = 'pending' for update;
+  if r.id is null then raise exception 'submission not found or already decided'; end if;
+  if p_approve then
+    if r.kind = 'new_species' then
+      sp := r.payload;
+      insert into public.species (id, pack_id, common_name, scientific_name, family, genus, order_name, taxon_group, authority, refs, iucn, endemic, sensitive, venom, toxic, habitat, distribution, id_notes)
+      values (coalesce(sp->>'id', lower(regexp_replace(sp->>'scientific_name', '[^A-Za-z]+', '-', 'g'))),
+              coalesce(sp->>'pack_id', case when sp->>'taxon_group' = 'snake' then 'snakes'
+                                            when sp->>'taxon_group' in ('frog','toad','caecilian') then 'frogs'
+                                            when sp->>'taxon_group' in ('turtle','tortoise','crocodilian') then 'turtles' else 'lizards' end),
+              sp->>'common_name', sp->>'scientific_name',
+              coalesce(sp->>'family',''), coalesce(sp->>'genus', split_part(sp->>'scientific_name',' ',1)), coalesce(sp->>'order_name',''), coalesce(sp->>'taxon_group',''),
+              coalesce(sp->>'authority',''), coalesce(sp->>'refs', r.refs), coalesce(sp->>'iucn','NE'), coalesce((sp->>'endemic')::boolean,false), coalesce((sp->>'sensitive')::boolean,false),
+              coalesce(sp->>'venom','non'), coalesce(sp->>'toxic','non'), coalesce(sp->>'habitat',''), coalesce(sp->>'distribution',''), coalesce(sp->>'id_notes',''));
+      if r.region_code is not null then
+        insert into public.checklist (region_code, species_id, status) values (r.region_code, coalesce(sp->>'id', lower(regexp_replace(sp->>'scientific_name', '[^A-Za-z]+', '-', 'g'))), coalesce(sp->>'checklist_status','native')) on conflict do nothing;
+      end if;
+    elsif r.kind in ('species_update', 'reference_photo') then
+      for k in select jsonb_object_keys(r.payload->'changes') loop
+        if k = any(allowed) then
+          sets := sets || format('%I = %s, ', k, case when k = 'images' then format('coalesce(images, ''[]''::jsonb) || %L::jsonb', r.payload->'changes'->k)
+                                                     when k in ('endemic','sensitive') then format('%L::boolean', r.payload->'changes'->>k)
+                                                     else format('%L', r.payload->'changes'->>k) end);
+        end if;
+      end loop;
+      if sets <> '' then execute format('update public.species set %s updated_at = now() where id = %L', sets, r.species_id); end if;
+    elsif r.kind in ('regional_checklist', 'checklist_change') then
+      for e in select * from jsonb_array_elements(coalesce(r.payload->'add', '[]')) loop
+        insert into public.checklist (region_code, species_id, status) values (r.region_code, e->>'species_id', coalesce(e->>'status','native'))
+        on conflict (region_code, species_id) do update set status = excluded.status;
+      end loop;
+      delete from public.checklist where region_code = r.region_code and species_id in (select jsonb_array_elements_text(coalesce(r.payload->'remove', '[]')));
+    end if;
+  end if;
+  update public.reviewer_submissions set status = case when p_approve then 'approved' else 'rejected' end,
+         decided_by = auth.uid(), decided_at = now(), decision_note = coalesce(p_note, '') where id = r.id returning * into r;
+  return r;
+end $$;
+revoke all on function public.decide_submission(uuid, boolean, text) from public, anon;
+grant execute on function public.decide_submission(uuid, boolean, text) to authenticated;
+
+-- reviewers: add species to regional checklists directly; read & annotate species
+drop policy if exists "checklist: reviewer add" on public.checklist;
+create policy "checklist: reviewer add" on public.checklist for insert with check (public.is_reviewer());
+drop policy if exists "checklist: reviewer edit" on public.checklist;
+create policy "checklist: reviewer edit" on public.checklist for update using (public.is_reviewer()) with check (public.is_reviewer());
+drop policy if exists "species: staff read" on public.species;
+create policy "species: staff read" on public.species for select using (public.is_reviewer());
+drop policy if exists "species: reviewer annotate" on public.species;
+create policy "species: reviewer annotate" on public.species for update using (public.is_reviewer()) with check (public.is_reviewer());
+-- … but taxonomy itself is Admin-only (reviewers send a submission)
+create or replace function public.guard_species_update() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() and auth.uid() is not null and
+     (new.id, new.pack_id, new.common_name, new.scientific_name, new.family, new.genus, new.order_name, new.taxon_group, new.authority, new.published)
+     is distinct from (old.id, old.pack_id, old.common_name, old.scientific_name, old.family, old.genus, old.order_name, old.taxon_group, old.authority, old.published) then
+    raise exception 'Names and taxonomy are changed by the Admin: send a taxonomy correction instead.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_species_update on public.species;
+create trigger guard_species_update before update on public.species for each row execute function public.guard_species_update();
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'audit_change' and tgrelid = 'public.observation_reviews'::regclass) then null; end if;
+end $$;
+do $$
+declare t text;
+begin
+  foreach t in array array['reviewer_submissions','platform_settings','regions'] loop
+    execute format('drop trigger if exists audit_change on public.%I', t);
+    execute format('create trigger audit_change after insert or update or delete on public.%I for each row execute function public.audit_change()', t);
+  end loop;
+end $$;
+
+
+-- species index (free) now carries taxonomy for filtering
+drop view if exists public.species_index;
+create view public.species_index as
+  select s.id, s.pack_id, s.common_name, s.scientific_name, s.family, s.genus, s.order_name, s.taxon_group, s.authority,
+         s.venom, s.toxic, s.iucn, s.endemic, s.sensitive,
+         coalesce((select array_agg(c.region_code) from public.checklist c where c.species_id = s.id), '{}') as regions
+  from public.species s where s.published;
+grant select on public.species_index to anon, authenticated;
+drop view if exists public.species_full;
+create view public.species_full with (security_invoker = true) as
+  select s.*, coalesce((select array_agg(c.region_code) from public.checklist c where c.species_id = s.id), '{}') as regions
+  from public.species s;
+grant select on public.species_full to authenticated;
+
+-- website statistics and map points respect observation privacy
+create or replace function public.public_stats() returns jsonb
+language sql security definer stable set search_path = public as $$
+with s as (select x.*, sp.pack_id, sp.iucn, sp.venom from public.sightings x left join public.species sp on sp.id = x.species_id where x.review_status <> 'rejected' and x.privacy <> 'private'),
+     r as (select x.user_id, x.species_id, x.count, x.observed_at, coalesce(sp.pack_id, x.pack) pk from public.roadkill_records x left join public.species sp on sp.id = x.species_id
+           union all
+           select x.user_id, x.species_id, x.count, x.observed_at, sp.pack_id from public.sightings x left join public.species sp on sp.id = x.species_id
+           where x.mortality = 'roadkill' and x.review_status <> 'rejected' and x.privacy <> 'private'),
+     km as (select coalesce(sum(d),0) v, count(*) n from (select distance_km d from public.roadkill_surveys union all select distance_km from public.trips where survey_type = 'road' and status = 'completed') z)
+select jsonb_build_object(
+  'totals', jsonb_build_object(
+     'sightings', (select coalesce(sum(count),0) from s),
+     'records', (select count(*) from s),
+     'species', (select count(distinct species_id) from s),
+     'observers', (select count(distinct user_id) from (select user_id from s union select user_id from r) u),
+     'roadkill', (select coalesce(sum(count),0) from r),
+     'roadkill_surveys', (select n from km),
+     'roadkill_km', (select round(v,1) from km),
+     'roadkill_per_100km', (select case when v > 0 then round((select coalesce(sum(count),0) from r) / v * 100, 1) else 0 end from km)),
+  'by_pack',  coalesce((select jsonb_agg(jsonb_build_object('pack', pack_id, 'n', n) order by n desc) from (select pack_id, sum(count) n from s group by 1) q), '[]'),
+  'roadkill_by_pack', coalesce((select jsonb_agg(jsonb_build_object('pack', pk, 'n', n) order by n desc) from (select pk, sum(count) n from r group by 1) q), '[]'),
+  'by_iucn',  coalesce((select jsonb_agg(jsonb_build_object('iucn', iucn, 'n', n) order by n desc) from (select iucn, sum(count) n from s where iucn is not null group by 1) q), '[]'),
+  'by_venom', coalesce((select jsonb_agg(jsonb_build_object('venom', venom, 'n', n) order by n desc) from (select venom, sum(count) n from s where pack_id = 'snakes' group by 1) q), '[]'),
+  'by_region',coalesce((select jsonb_agg(jsonb_build_object('region', region_code, 'n', n) order by n desc) from (select region_code, sum(count) n from s where region_code is not null group by 1) q), '[]'),
+  'by_month', coalesce((select jsonb_agg(jsonb_build_object('month', m, 'sightings', a, 'roadkill', b) order by m) from (
+       select m, sum(a) a, sum(b) b from (
+         select to_char(observed_at,'YYYY-MM') m, count a, 0 b from s
+         union all select to_char(observed_at,'YYYY-MM'), 0, count from r) z group by m) q), '[]'),
+  'top_species', coalesce((select jsonb_agg(jsonb_build_object('species_id', q.species_id, 'n', q.n, 'common', sp.common_name, 'sci', sp.scientific_name) order by q.n desc)
+       from (select species_id, sum(count) n from s where species_id is not null group by 1 order by 2 desc limit 12) q join public.species sp on sp.id = q.species_id), '[]'),
+  'roadkill_species', coalesce((select jsonb_agg(jsonb_build_object('species_id', q.species_id, 'n', q.n, 'common', sp.common_name, 'sci', sp.scientific_name) order by q.n desc)
+       from (select species_id, sum(count) n from r where species_id is not null group by 1 order by 2 desc limit 12) q join public.species sp on sp.id = q.species_id), '[]')
+);
+$$;
+
+create or replace function public.public_points() returns table(kind text, species_id text, pack text, iucn text, lat double precision, lng double precision, month text)
+language sql security definer stable set search_path = public as $$
+  select 'sighting', x.species_id, sp.pack_id, sp.iucn,
+         round(x.lat::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         round(x.lng::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         to_char(x.observed_at,'YYYY-MM')
+  from public.sightings x left join public.species sp on sp.id = x.species_id
+  where x.review_status <> 'rejected' and x.privacy = 'public' and x.lat is not null
+  union all
+  select 'roadkill', x.species_id, coalesce(sp.pack_id, x.pack), sp.iucn,
+         round(x.lat::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         round(x.lng::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         to_char(x.observed_at,'YYYY-MM')
+  from public.roadkill_records x left join public.species sp on sp.id = x.species_id
+  where x.lat is not null;
+$$;
+
+-- public observations for the Explore map (privacy-aware) -------------------------------
+create or replace function public.public_observations(p_species text default null, p_family text default null, p_from date default null, p_to date default null,
+                                                      p_region text default null, p_status text default null, p_limit int default 3000)
+returns table(id uuid, species_id text, common_name text, scientific_name text, family text, taxon_group text, count int, observed_at timestamptz,
+              lat double precision, lng double precision, precise boolean, location_name text, state_code text, district_code text, island_code text,
+              habitat text, microhabitat text, notes text, review_status text, photo text, observer text, evidence text)
+language sql security definer stable set search_path = public as $$
+  select x.id, x.species_id, sp.common_name, sp.scientific_name, sp.family, sp.taxon_group, x.count, x.observed_at,
+         case when coalesce(sp.sensitive, false) then round(x.lat::numeric, coalesce((public.setting('sensitive_blur_decimals'))::int, 1))::float8 else x.lat end,
+         case when coalesce(sp.sensitive, false) then round(x.lng::numeric, coalesce((public.setting('sensitive_blur_decimals'))::int, 1))::float8 else x.lng end,
+         not coalesce(sp.sensitive, false), x.location_name, x.state_code, x.district_code, x.island_code,
+         x.habitat, x.microhabitat, case when coalesce(sp.sensitive, false) then '' else x.notes end, x.review_status,
+         coalesce((select p.url from public.photos p where p.sighting_id = x.id order by p.created_at limit 1), x.photos->>0),
+         (select pr.username from public.profiles pr where pr.id = x.user_id), x.evidence
+  from public.sightings x left join public.species sp on sp.id = x.species_id
+  where x.privacy = 'public' and x.review_status <> 'rejected' and x.lat is not null
+    and (p_species is null or x.species_id = p_species)
+    and (p_family is null or sp.family = p_family)
+    and (p_from is null or x.observed_at >= p_from) and (p_to is null or x.observed_at < p_to + 1)
+    and (p_region is null or p_region in (x.region_code, x.state_code, x.district_code, x.island_code))
+    and (p_status is null or x.review_status = p_status)
+  order by x.observed_at desc
+  limit least(coalesce(p_limit, 3000), 5000);
+$$;
+grant execute on function public.public_observations(text, text, date, date, text, text, int) to anon, authenticated;
+
+-- leaderboard: recorders ranked by distinct species (records break ties); private and rejected records never count
+create or replace function public.public_leaderboard(p_region text default null, p_from date default null, p_group text default null, p_limit int default 50)
+returns table(rank bigint, username text, full_name text, species bigint, records bigint)
+language sql security definer stable set search_path = public as $$
+  select rank() over (order by count(distinct x.species_id) desc, count(*) desc), pr.username, pr.full_name,
+         count(distinct x.species_id), count(*)
+  from public.sightings x join public.profiles pr on pr.id = x.user_id left join public.species sp on sp.id = x.species_id
+  where x.species_id is not null and x.review_status <> 'rejected' and x.privacy <> 'private' and coalesce(x.duplicate_of::text, '') = ''
+    and (p_from is null or x.observed_at >= p_from)
+    and (p_region is null or p_region in (x.region_code, x.state_code, x.district_code, x.island_code) or (p_region = 'IN' and x.region_code like 'IN%'))
+    and (p_group is null or sp.taxon_group = p_group)
+  group by pr.id, pr.username, pr.full_name
+  order by 1, pr.username
+  limit least(coalesce(p_limit, 50), 200);
+$$;
+grant execute on function public.public_leaderboard(text, date, text, int) to anon, authenticated;
+
 -- ─── feedback (public form + in-app) ───────────────────────────────────────
 -- Anyone may send feedback (signed in or not); only admins read it.
 create table if not exists public.feedback (
@@ -610,47 +1095,65 @@ update public.profiles p set email = u.email from auth.users u where u.id = p.id
 
 -- GENERATED by scripts/build-seed.mjs from data/seed.js — re-run the script, do not hand-edit.
 begin;
-insert into public.regions (code,name,parent) values ('IN','India',null) on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('LK','Sri Lanka',null) on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('NP','Nepal',null) on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('BD','Bangladesh',null) on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('BT','Bhutan',null) on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-AN','Andaman & Nicobar Islands','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-AP','Andhra Pradesh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-AR','Arunachal Pradesh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-AS','Assam','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-BR','Bihar','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-CH','Chandigarh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-CT','Chhattisgarh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-DH','Dadra & Nagar Haveli and Daman & Diu','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-DL','Delhi','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-GA','Goa','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-GJ','Gujarat','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-HR','Haryana','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-HP','Himachal Pradesh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-JK','Jammu & Kashmir','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-JH','Jharkhand','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-KA','Karnataka','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-KL','Kerala','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-LA','Ladakh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-LD','Lakshadweep','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-MP','Madhya Pradesh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-MH','Maharashtra','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-MN','Manipur','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-ML','Meghalaya','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-MZ','Mizoram','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-NL','Nagaland','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-OR','Odisha','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-PY','Puducherry','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-PB','Punjab','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-RJ','Rajasthan','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-SK','Sikkim','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-TN','Tamil Nadu','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-TG','Telangana','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-TR','Tripura','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-UP','Uttar Pradesh','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-UT','Uttarakhand','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
-insert into public.regions (code,name,parent) values ('IN-WB','West Bengal','IN') on conflict (code) do update set name=excluded.name, parent=excluded.parent;
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN','India',null,'country',22.5,79) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('LK','Sri Lanka',null,'country',7.9,80.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('NP','Nepal',null,'country',28.4,84.1) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('BD','Bangladesh',null,'country',23.7,90.4) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('BT','Bhutan',null,'country',27.5,90.4) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN','Andaman & Nicobar Islands','IN','ut',11.7,92.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AP','Andhra Pradesh','IN','state',15.9,79.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AR','Arunachal Pradesh','IN','state',28.2,94.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AS','Assam','IN','state',26.2,92.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-BR','Bihar','IN','state',25.9,85.3) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-CH','Chandigarh','IN','ut',30.73,76.78) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-CT','Chhattisgarh','IN','state',21.3,81.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-DH','Dadra & Nagar Haveli and Daman & Diu','IN','ut',20.4,73) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-DL','Delhi','IN','ut',28.6,77.2) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-GA','Goa','IN','state',15.4,74) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-GJ','Gujarat','IN','state',22.3,71.2) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-HR','Haryana','IN','state',29.1,76.1) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-HP','Himachal Pradesh','IN','state',31.9,77.2) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-JK','Jammu & Kashmir','IN','ut',33.8,75) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-JH','Jharkhand','IN','state',23.6,85.3) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-KA','Karnataka','IN','state',14.6,75.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-KL','Kerala','IN','state',10.3,76.4) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-LA','Ladakh','IN','ut',34.2,77.6) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-LD','Lakshadweep','IN','ut',10.6,72.6) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-MP','Madhya Pradesh','IN','state',23.5,78.6) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-MH','Maharashtra','IN','state',19.5,75.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-MN','Manipur','IN','state',24.7,93.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-ML','Meghalaya','IN','state',25.5,91.3) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-MZ','Mizoram','IN','state',23.2,92.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-NL','Nagaland','IN','state',26.1,94.5) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-OR','Odisha','IN','state',20.5,84.4) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-PY','Puducherry','IN','ut',11.94,79.8) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-PB','Punjab','IN','state',31.1,75.3) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-RJ','Rajasthan','IN','state',26.9,73.8) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-SK','Sikkim','IN','state',27.5,88.5) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-TN','Tamil Nadu','IN','state',11.1,78.6) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-TG','Telangana','IN','state',17.9,79.1) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-TR','Tripura','IN','state',23.9,91.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-UP','Uttar Pradesh','IN','state',27,80.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-UT','Uttarakhand','IN','state',30.1,79) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-WB','West Bengal','IN','state',23,87.9) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-SA','South Andaman (district)','IN-AN','district',11.62,92.72) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-NM','North & Middle Andaman (district)','IN-AN','district',12.75,92.88) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-NI','Nicobar (district)','IN-AN','district',8,93.5) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-SAI','South Andaman Island','IN-AN-SA','island',11.65,92.7) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-RUT','Rutland Island','IN-AN-SA','island',11.42,92.65) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-SWD','Swaraj Dweep (Havelock)','IN-AN-SA','island',11.98,92.98) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-SHD','Shaheed Dweep (Neil)','IN-AN-SA','island',11.83,93.03) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-LAI','Little Andaman','IN-AN-SA','island',10.65,92.53) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-BAR','Baratang Island','IN-AN-NM','island',12.12,92.78) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-MAI','Middle Andaman','IN-AN-NM','island',12.55,92.85) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-NAI','North Andaman','IN-AN-NM','island',13.2,92.93) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-NAR','Narcondam Island','IN-AN-NM','island',13.45,94.27) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-CAR','Car Nicobar','IN-AN-NI','island',9.17,92.79) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-KAM','Kamorta','IN-AN-NI','island',8.08,93.52) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-KAT','Katchal','IN-AN-NI','island',7.95,93.4) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-TER','Teressa','IN-AN-NI','island',8.28,93.13) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-LNI','Little Nicobar','IN-AN-NI','island',7.33,93.68) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
+insert into public.regions (code,name,parent,kind,lat,lng) values ('IN-AN-I-GNI','Great Nicobar','IN-AN-NI','island',7,93.85) on conflict (code) do update set name=excluded.name, parent=excluded.parent, kind=excluded.kind, lat=coalesce(regions.lat, excluded.lat), lng=coalesce(regions.lng, excluded.lng);
 insert into public.packs (id,name,emoji,color,blurb,sort) values ('snakes','Snakes','🐍','#2f7d4f','Cobras, kraits, vipers, pythons, keelbacks and more',0) on conflict (id) do update set name=excluded.name, emoji=excluded.emoji, color=excluded.color, blurb=excluded.blurb, sort=excluded.sort;
 insert into public.packs (id,name,emoji,color,blurb,sort) values ('lizards','Lizards & Geckos','🦎','#b7791f','Monitors, agamas, chameleons, skinks and geckos',1) on conflict (id) do update set name=excluded.name, emoji=excluded.emoji, color=excluded.color, blurb=excluded.blurb, sort=excluded.sort;
 insert into public.packs (id,name,emoji,color,blurb,sort) values ('frogs','Frogs & Toads','🐸','#2b6cb0','True frogs, tree frogs, toads and caecilians',2) on conflict (id) do update set name=excluded.name, emoji=excluded.emoji, color=excluded.color, blurb=excluded.blurb, sort=excluded.sort;
@@ -666,7 +1169,7 @@ insert into _seed_prices values ('frogs','*state',5900,365);
 insert into _seed_prices values ('turtles','*state',3900,365);
 insert into public.pack_prices (pack_id,region_code,paise,days) select * from _seed_prices where not exists (select 1 from public.pack_prices) on conflict do nothing;
 create temp table _seed_checklist (region_code text, species_id text, status text) on commit drop;
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('naja-naja','snakes','Spectacled Cobra','Naja naja','Elapidae','venomous','non','LC',false,false,'1.0–1.5 m (max ~2.2 m)','Farmland, scrub, forest edges, villages and suburbs; often near rodent-rich granaries and termite mounds.','Throughout mainland India below ~2000 m; also Sri Lanka, Nepal, Bangladesh, Pakistan.','Raises hood when threatened; spectacle-shaped mark on the back of the hood; usually brown, black or tan.','Mostly crepuscular. One of the “Big Four” medically important snakes — seek a hospital with anti-venom immediately after a bite.','Indian Rat Snake (no hood, larger eyes); Monocled Cobra (single ring on hood).','[]'::jsonb,'{"color":["brown","black"],"pattern":"plain","time":"dusk"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('naja-naja','snakes','Spectacled Cobra','Naja naja','Elapidae','venomous','non','LC',false,false,'1.0–1.5 m (max ~2.2 m)','Farmland, scrub, forest edges, villages and suburbs; often near rodent-rich granaries and termite mounds.','Throughout mainland India below ~2000 m; also Sri Lanka, Nepal, Bangladesh, Pakistan.','Raises hood when threatened; spectacle-shaped mark on the back of the hood; usually brown, black or tan.','Mostly crepuscular. One of the “Big Four” medically important snakes — seek a hospital with anti-venom immediately after a bite.','Indian Rat Snake (no hood, larger eyes); Monocled Cobra (single ring on hood).','[]'::jsonb,'{"color":["brown","black"],"pattern":"plain","time":"dusk"}'::jsonb,'Naja','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','naja-naja','native');
 insert into _seed_checklist values ('IN-AP','naja-naja','native');
 insert into _seed_checklist values ('IN-AS','naja-naja','native');
@@ -694,7 +1197,7 @@ insert into _seed_checklist values ('IN-CH','naja-naja','native');
 insert into _seed_checklist values ('LK','naja-naja','native');
 insert into _seed_checklist values ('NP','naja-naja','native');
 insert into _seed_checklist values ('BD','naja-naja','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('bungarus-caeruleus','snakes','Common Krait','Bungarus caeruleus','Elapidae','venomous','non','LC',false,false,'0.9–1.2 m','Fields, scrub, rural houses; often enters homes at night and hides under bedding.','Most of mainland India; Sri Lanka, Nepal, Bangladesh, Pakistan.','Glossy blue-black with thin paired white crossbands that become indistinct towards the head; enlarged hexagonal vertebral scales.','Strictly nocturnal. Bite is often painless while the victim sleeps — use a mosquito net and sleep off the floor. “Big Four”.','Common Wolf Snake (brown, bands broader near head, non-venomous).','[]'::jsonb,'{"color":["black","blue"],"pattern":"banded","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('bungarus-caeruleus','snakes','Common Krait','Bungarus caeruleus','Elapidae','venomous','non','LC',false,false,'0.9–1.2 m','Fields, scrub, rural houses; often enters homes at night and hides under bedding.','Most of mainland India; Sri Lanka, Nepal, Bangladesh, Pakistan.','Glossy blue-black with thin paired white crossbands that become indistinct towards the head; enlarged hexagonal vertebral scales.','Strictly nocturnal. Bite is often painless while the victim sleeps — use a mosquito net and sleep off the floor. “Big Four”.','Common Wolf Snake (brown, bands broader near head, non-venomous).','[]'::jsonb,'{"color":["black","blue"],"pattern":"banded","time":"night"}'::jsonb,'Bungarus','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','bungarus-caeruleus','native');
 insert into _seed_checklist values ('IN-AP','bungarus-caeruleus','native');
 insert into _seed_checklist values ('IN-AS','bungarus-caeruleus','native');
@@ -722,7 +1225,7 @@ insert into _seed_checklist values ('IN-CH','bungarus-caeruleus','native');
 insert into _seed_checklist values ('LK','bungarus-caeruleus','native');
 insert into _seed_checklist values ('NP','bungarus-caeruleus','native');
 insert into _seed_checklist values ('BD','bungarus-caeruleus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('daboia-russelii','snakes','Russell''s Viper','Daboia russelii','Viperidae','venomous','non','LC',false,false,'1.0–1.2 m (stout)','Open grassland, scrub and farmland; avoids dense forest.','Most of mainland India, Sri Lanka, Nepal, Bangladesh, Pakistan.','Three rows of dark brown, black-edged chain-like oval spots on a tan body; triangular head; very loud hiss.','Nocturnal in hot weather. Responsible for many bites in paddy fields — wear boots and use a torch. “Big Four”.','Indian Rock Python (blotches irregular, head with arrowhead mark).','[]'::jsonb,'{"color":["brown","tan"],"pattern":"spotted","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('daboia-russelii','snakes','Russell''s Viper','Daboia russelii','Viperidae','venomous','non','LC',false,false,'1.0–1.2 m (stout)','Open grassland, scrub and farmland; avoids dense forest.','Most of mainland India, Sri Lanka, Nepal, Bangladesh, Pakistan.','Three rows of dark brown, black-edged chain-like oval spots on a tan body; triangular head; very loud hiss.','Nocturnal in hot weather. Responsible for many bites in paddy fields — wear boots and use a torch. “Big Four”.','Indian Rock Python (blotches irregular, head with arrowhead mark).','[]'::jsonb,'{"color":["brown","tan"],"pattern":"spotted","time":"night"}'::jsonb,'Daboia','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','daboia-russelii','native');
 insert into _seed_checklist values ('IN-AP','daboia-russelii','native');
 insert into _seed_checklist values ('IN-AS','daboia-russelii','native');
@@ -750,7 +1253,7 @@ insert into _seed_checklist values ('IN-CH','daboia-russelii','native');
 insert into _seed_checklist values ('LK','daboia-russelii','native');
 insert into _seed_checklist values ('NP','daboia-russelii','native');
 insert into _seed_checklist values ('BD','daboia-russelii','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('echis-carinatus','snakes','Saw-scaled Viper','Echis carinatus','Viperidae','venomous','non','LC',false,false,'0.3–0.6 m','Dry rocky scrub, laterite plateaus, sandy coasts.','Dry regions of peninsular and western India, Sri Lanka.','Small; serrated keeled scales; arrow / trident mark on head; wavy pale zig-zag along flanks; rasps by rubbing coils.','Nocturnal; very quick to strike. “Big Four”.','Juvenile Russell’s Viper; Sand Boas (blunt tail, smooth).','[]'::jsonb,'{"color":["brown","grey"],"pattern":"zigzag","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('echis-carinatus','snakes','Saw-scaled Viper','Echis carinatus','Viperidae','venomous','non','LC',false,false,'0.3–0.6 m','Dry rocky scrub, laterite plateaus, sandy coasts.','Dry regions of peninsular and western India, Sri Lanka.','Small; serrated keeled scales; arrow / trident mark on head; wavy pale zig-zag along flanks; rasps by rubbing coils.','Nocturnal; very quick to strike. “Big Four”.','Juvenile Russell’s Viper; Sand Boas (blunt tail, smooth).','[]'::jsonb,'{"color":["brown","grey"],"pattern":"zigzag","time":"night"}'::jsonb,'Echis','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','echis-carinatus','native');
 insert into _seed_checklist values ('IN-RJ','echis-carinatus','native');
 insert into _seed_checklist values ('IN-GJ','echis-carinatus','native');
@@ -762,7 +1265,7 @@ insert into _seed_checklist values ('IN-TG','echis-carinatus','native');
 insert into _seed_checklist values ('IN-GA','echis-carinatus','native');
 insert into _seed_checklist values ('IN-PY','echis-carinatus','native');
 insert into _seed_checklist values ('LK','echis-carinatus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('ophiophagus-hannah','snakes','King Cobra','Ophiophagus hannah','Elapidae','venomous','non','VU',false,true,'3–4 m (max ~5.5 m)','Evergreen and moist deciduous forest, often near streams; plantations.','Western Ghats, Eastern Ghats (patchy), Himalayan foothills, north-east India, Andaman Islands.','Very long; narrow hood without spectacle mark; pale chevron bands; large occipital scales behind the head.','Diurnal; feeds mainly on other snakes; female builds a leaf-litter nest. Rarely aggressive unless cornered.','Indian Rat Snake / Banded Racer (no hood).','[]'::jsonb,'{"color":["olive","black","brown"],"pattern":"banded","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('ophiophagus-hannah','snakes','King Cobra','Ophiophagus hannah','Elapidae','venomous','non','VU',false,true,'3–4 m (max ~5.5 m)','Evergreen and moist deciduous forest, often near streams; plantations.','Western Ghats, Eastern Ghats (patchy), Himalayan foothills, north-east India, Andaman Islands.','Very long; narrow hood without spectacle mark; pale chevron bands; large occipital scales behind the head.','Diurnal; feeds mainly on other snakes; female builds a leaf-litter nest. Rarely aggressive unless cornered.','Indian Rat Snake / Banded Racer (no hood).','[]'::jsonb,'{"color":["olive","black","brown"],"pattern":"banded","time":"day"}'::jsonb,'Ophiophagus','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','ophiophagus-hannah','native');
 insert into _seed_checklist values ('IN-KL','ophiophagus-hannah','native');
 insert into _seed_checklist values ('IN-KA','ophiophagus-hannah','native');
@@ -783,7 +1286,7 @@ insert into _seed_checklist values ('IN-AN','ophiophagus-hannah','native');
 insert into _seed_checklist values ('NP','ophiophagus-hannah','native');
 insert into _seed_checklist values ('BD','ophiophagus-hannah','native');
 insert into _seed_checklist values ('BT','ophiophagus-hannah','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('python-molurus','snakes','Indian Rock Python','Python molurus','Pythonidae','non','non','NT',false,true,'2–4 m','Forests, grassland, rocky hills and swamps, usually near water.','Mainland India, Sri Lanka, Nepal, Bangladesh, Pakistan. Protected under Schedule I (WPA 1972).','Heavy body with irregular dark blotches; pinkish arrowhead mark on head; heat-sensing pits on lip scales.','Constrictor; slow-moving; often basks.','Russell''s Viper (three neat chain rows); Common Sand Boa.','[]'::jsonb,'{"color":["brown","tan"],"pattern":"blotched","time":"any"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('python-molurus','snakes','Indian Rock Python','Python molurus','Pythonidae','non','non','NT',false,true,'2–4 m','Forests, grassland, rocky hills and swamps, usually near water.','Mainland India, Sri Lanka, Nepal, Bangladesh, Pakistan. Protected under Schedule I (WPA 1972).','Heavy body with irregular dark blotches; pinkish arrowhead mark on head; heat-sensing pits on lip scales.','Constrictor; slow-moving; often basks.','Russell''s Viper (three neat chain rows); Common Sand Boa.','[]'::jsonb,'{"color":["brown","tan"],"pattern":"blotched","time":"any"}'::jsonb,'Python','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','python-molurus','native');
 insert into _seed_checklist values ('IN-AP','python-molurus','native');
 insert into _seed_checklist values ('IN-AS','python-molurus','native');
@@ -811,7 +1314,7 @@ insert into _seed_checklist values ('IN-CH','python-molurus','native');
 insert into _seed_checklist values ('LK','python-molurus','native');
 insert into _seed_checklist values ('NP','python-molurus','native');
 insert into _seed_checklist values ('BD','python-molurus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('ptyas-mucosa','snakes','Indian Rat Snake','Ptyas mucosa','Colubridae','non','non','LC',false,false,'1.5–2.5 m','Farmland, towns, wetlands, forest edges — wherever rodents are.','Throughout India including the Andaman Islands; South and South-east Asia.','Long, slender, olive-brown with dark crossbars on the rear body and tail; large eyes; dark lines between lip scales.','Diurnal, fast; excellent rodent controller. Growls and inflates throat when cornered.','Spectacled Cobra (hood, smaller eyes).','[]'::jsonb,'{"color":["olive","brown","yellow"],"pattern":"banded","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('ptyas-mucosa','snakes','Indian Rat Snake','Ptyas mucosa','Colubridae','non','non','LC',false,false,'1.5–2.5 m','Farmland, towns, wetlands, forest edges — wherever rodents are.','Throughout India including the Andaman Islands; South and South-east Asia.','Long, slender, olive-brown with dark crossbars on the rear body and tail; large eyes; dark lines between lip scales.','Diurnal, fast; excellent rodent controller. Growls and inflates throat when cornered.','Spectacled Cobra (hood, smaller eyes).','[]'::jsonb,'{"color":["olive","brown","yellow"],"pattern":"banded","time":"day"}'::jsonb,'Ptyas','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','ptyas-mucosa','native');
 insert into _seed_checklist values ('IN-AP','ptyas-mucosa','native');
 insert into _seed_checklist values ('IN-AS','ptyas-mucosa','native');
@@ -848,7 +1351,7 @@ insert into _seed_checklist values ('LK','ptyas-mucosa','native');
 insert into _seed_checklist values ('NP','ptyas-mucosa','native');
 insert into _seed_checklist values ('BD','ptyas-mucosa','native');
 insert into _seed_checklist values ('BT','ptyas-mucosa','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('fowlea-piscator','snakes','Checkered Keelback','Fowlea piscator','Natricidae','non','non','LC',false,false,'0.6–1.2 m','Ponds, rice fields, rivers, tanks — rarely far from water.','Throughout India and South Asia.','Olive with a checkerboard of dark spots; two black lines from eye to lip; keeled scales.','Diurnal and nocturnal; feeds on fish and frogs; bites readily but harmless.','Russell''s Viper (on land; chain spots); Olive Keelback.','[]'::jsonb,'{"color":["olive","yellow"],"pattern":"checkered","time":"any"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('fowlea-piscator','snakes','Checkered Keelback','Fowlea piscator','Natricidae','non','non','LC',false,false,'0.6–1.2 m','Ponds, rice fields, rivers, tanks — rarely far from water.','Throughout India and South Asia.','Olive with a checkerboard of dark spots; two black lines from eye to lip; keeled scales.','Diurnal and nocturnal; feeds on fish and frogs; bites readily but harmless.','Russell''s Viper (on land; chain spots); Olive Keelback.','[]'::jsonb,'{"color":["olive","yellow"],"pattern":"checkered","time":"any"}'::jsonb,'Fowlea','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','fowlea-piscator','native');
 insert into _seed_checklist values ('IN-AP','fowlea-piscator','native');
 insert into _seed_checklist values ('IN-AS','fowlea-piscator','native');
@@ -883,7 +1386,7 @@ insert into _seed_checklist values ('IN-SK','fowlea-piscator','native');
 insert into _seed_checklist values ('LK','fowlea-piscator','native');
 insert into _seed_checklist values ('NP','fowlea-piscator','native');
 insert into _seed_checklist values ('BD','fowlea-piscator','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('lycodon-aulicus','snakes','Common Wolf Snake','Lycodon aulicus','Colubridae','non','non','LC',false,false,'0.4–0.8 m','Houses, walls, tree holes, gardens — climbs well.','Throughout India incl. Andaman & Nicobar; South-east Asia.','Brown with narrow white or yellow crossbands that are broader near the head; flat head; white lips.','Nocturnal; eats geckos. Often mistaken for kraits.','Common Krait (blue-black, paired thin bands fading toward head — venomous).','[]'::jsonb,'{"color":["brown"],"pattern":"banded","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('lycodon-aulicus','snakes','Common Wolf Snake','Lycodon aulicus','Colubridae','non','non','LC',false,false,'0.4–0.8 m','Houses, walls, tree holes, gardens — climbs well.','Throughout India incl. Andaman & Nicobar; South-east Asia.','Brown with narrow white or yellow crossbands that are broader near the head; flat head; white lips.','Nocturnal; eats geckos. Often mistaken for kraits.','Common Krait (blue-black, paired thin bands fading toward head — venomous).','[]'::jsonb,'{"color":["brown"],"pattern":"banded","time":"night"}'::jsonb,'Lycodon','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','lycodon-aulicus','native');
 insert into _seed_checklist values ('IN-AP','lycodon-aulicus','native');
 insert into _seed_checklist values ('IN-AS','lycodon-aulicus','native');
@@ -919,7 +1422,7 @@ insert into _seed_checklist values ('IN-AN','lycodon-aulicus','native');
 insert into _seed_checklist values ('LK','lycodon-aulicus','native');
 insert into _seed_checklist values ('NP','lycodon-aulicus','native');
 insert into _seed_checklist values ('BD','lycodon-aulicus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('ahaetulla-nasuta','snakes','Green Vine Snake','Ahaetulla nasuta','Colubridae','mild','non','LC',false,false,'1–1.5 m (very slender)','Shrubs and trees in forests and gardens.','Western Ghats, Sri Lanka and parts of peninsular India.','Bright green, whip-thin; long pointed snout; horizontal keyhole pupils.','Diurnal; rear-fanged — mild venom, not medically significant.','Green Keelback (rounded snout).','[]'::jsonb,'{"color":["green"],"pattern":"plain","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('ahaetulla-nasuta','snakes','Green Vine Snake','Ahaetulla nasuta','Colubridae','mild','non','LC',false,false,'1–1.5 m (very slender)','Shrubs and trees in forests and gardens.','Western Ghats, Sri Lanka and parts of peninsular India.','Bright green, whip-thin; long pointed snout; horizontal keyhole pupils.','Diurnal; rear-fanged — mild venom, not medically significant.','Green Keelback (rounded snout).','[]'::jsonb,'{"color":["green"],"pattern":"plain","time":"day"}'::jsonb,'Ahaetulla','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','ahaetulla-nasuta','native');
 insert into _seed_checklist values ('IN-KA','ahaetulla-nasuta','native');
 insert into _seed_checklist values ('IN-KL','ahaetulla-nasuta','native');
@@ -930,13 +1433,13 @@ insert into _seed_checklist values ('IN-MH','ahaetulla-nasuta','native');
 insert into _seed_checklist values ('IN-GA','ahaetulla-nasuta','native');
 insert into _seed_checklist values ('IN-PY','ahaetulla-nasuta','native');
 insert into _seed_checklist values ('LK','ahaetulla-nasuta','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('bungarus-andamanensis','snakes','Andaman Krait','Bungarus andamanensis','Elapidae','venomous','non','DD',true,false,'0.8–1.0 m','Lowland forest, plantations and settlements.','Endemic to the Andaman Islands.','Black with numerous narrow white crossbands; smooth glossy scales; enlarged vertebral row.','Nocturnal. Treat any bite as a medical emergency.','Common Wolf Snake.','[]'::jsonb,'{"color":["black"],"pattern":"banded","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('bungarus-andamanensis','snakes','Andaman Krait','Bungarus andamanensis','Elapidae','venomous','non','DD',true,false,'0.8–1.0 m','Lowland forest, plantations and settlements.','Endemic to the Andaman Islands.','Black with numerous narrow white crossbands; smooth glossy scales; enlarged vertebral row.','Nocturnal. Treat any bite as a medical emergency.','Common Wolf Snake.','[]'::jsonb,'{"color":["black"],"pattern":"banded","time":"night"}'::jsonb,'Bungarus','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','bungarus-andamanensis','native');
 insert into _seed_checklist values ('IN-AN','bungarus-andamanensis','endemic');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('trimeresurus-andersonii','snakes','Andaman Pit Viper','Trimeresurus andersonii','Viperidae','venomous','non','LC',true,false,'0.5–0.8 m','Forest floor, plantations, mangrove edges; often coiled on low vegetation.','Endemic to the Andaman Islands.','Green to brown, often with dark blotches; triangular head with heat-sensing loreal pit.','Nocturnal ambush predator.','Green Vine Snake (pointed snout, no pit).','[]'::jsonb,'{"color":["green","brown"],"pattern":"blotched","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('trimeresurus-andersonii','snakes','Andaman Pit Viper','Trimeresurus andersonii','Viperidae','venomous','non','LC',true,false,'0.5–0.8 m','Forest floor, plantations, mangrove edges; often coiled on low vegetation.','Endemic to the Andaman Islands.','Green to brown, often with dark blotches; triangular head with heat-sensing loreal pit.','Nocturnal ambush predator.','Green Vine Snake (pointed snout, no pit).','[]'::jsonb,'{"color":["green","brown"],"pattern":"blotched","time":"night"}'::jsonb,'Trimeresurus','Squamata','snake','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','trimeresurus-andersonii','native');
 insert into _seed_checklist values ('IN-AN','trimeresurus-andersonii','endemic');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('varanus-bengalensis','lizards','Bengal Monitor','Varanus bengalensis','Varanidae','non','non','LC',false,true,'0.6–1.75 m incl. tail','Forest, farmland, villages; shelters in burrows, tree hollows and walls.','Throughout mainland India; South and South-east Asia. Schedule I (WPA 1972).','Large grey-brown lizard; long forked tongue; slit-like nostrils midway between eye and snout.','Diurnal; poached for meat and “hatha jodi” trade.','Water Monitor (yellow spots, near water).','[]'::jsonb,'{"color":["grey","brown"],"pattern":"spotted","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('varanus-bengalensis','lizards','Bengal Monitor','Varanus bengalensis','Varanidae','non','non','LC',false,true,'0.6–1.75 m incl. tail','Forest, farmland, villages; shelters in burrows, tree hollows and walls.','Throughout mainland India; South and South-east Asia. Schedule I (WPA 1972).','Large grey-brown lizard; long forked tongue; slit-like nostrils midway between eye and snout.','Diurnal; poached for meat and “hatha jodi” trade.','Water Monitor (yellow spots, near water).','[]'::jsonb,'{"color":["grey","brown"],"pattern":"spotted","time":"day"}'::jsonb,'Varanus','Squamata','monitor','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','varanus-bengalensis','native');
 insert into _seed_checklist values ('IN-AP','varanus-bengalensis','native');
 insert into _seed_checklist values ('IN-AS','varanus-bengalensis','native');
@@ -971,7 +1474,7 @@ insert into _seed_checklist values ('IN-SK','varanus-bengalensis','native');
 insert into _seed_checklist values ('NP','varanus-bengalensis','native');
 insert into _seed_checklist values ('BD','varanus-bengalensis','native');
 insert into _seed_checklist values ('LK','varanus-bengalensis','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('calotes-versicolor','lizards','Oriental Garden Lizard','Calotes versicolor','Agamidae','non','non','LC',false,false,'25–37 cm incl. tail','Gardens, hedges, scrub, open forest.','Throughout India; widespread in Asia.','Crest along neck and back; breeding males get a red head and throat (“bloodsucker”).','Diurnal; harmless insect-eater.','Forest Calotes (green).','[]'::jsonb,'{"color":["brown","red","yellow"],"pattern":"banded","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('calotes-versicolor','lizards','Oriental Garden Lizard','Calotes versicolor','Agamidae','non','non','LC',false,false,'25–37 cm incl. tail','Gardens, hedges, scrub, open forest.','Throughout India; widespread in Asia.','Crest along neck and back; breeding males get a red head and throat (“bloodsucker”).','Diurnal; harmless insect-eater.','Forest Calotes (green).','[]'::jsonb,'{"color":["brown","red","yellow"],"pattern":"banded","time":"day"}'::jsonb,'Calotes','Squamata','agama','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','calotes-versicolor','native');
 insert into _seed_checklist values ('IN-AP','calotes-versicolor','native');
 insert into _seed_checklist values ('IN-AS','calotes-versicolor','native');
@@ -1008,7 +1511,7 @@ insert into _seed_checklist values ('LK','calotes-versicolor','native');
 insert into _seed_checklist values ('NP','calotes-versicolor','native');
 insert into _seed_checklist values ('BD','calotes-versicolor','native');
 insert into _seed_checklist values ('BT','calotes-versicolor','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('chamaeleo-zeylanicus','lizards','Indian Chameleon','Chamaeleo zeylanicus','Chamaeleonidae','non','non','LC',false,true,'25–38 cm','Dry deciduous forest and scrub; perches on bushes.','Peninsular India, Gujarat, Rajasthan, Sri Lanka. Schedule II.','Laterally compressed body, independently rotating eyes, prehensile tail, zygodactyl feet.','Diurnal, very slow; changes colour with mood.','None in India.','[]'::jsonb,'{"color":["green","yellow","brown"],"pattern":"plain","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('chamaeleo-zeylanicus','lizards','Indian Chameleon','Chamaeleo zeylanicus','Chamaeleonidae','non','non','LC',false,true,'25–38 cm','Dry deciduous forest and scrub; perches on bushes.','Peninsular India, Gujarat, Rajasthan, Sri Lanka. Schedule II.','Laterally compressed body, independently rotating eyes, prehensile tail, zygodactyl feet.','Diurnal, very slow; changes colour with mood.','None in India.','[]'::jsonb,'{"color":["green","yellow","brown"],"pattern":"plain","time":"day"}'::jsonb,'Chamaeleo','Squamata','chameleon','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','chamaeleo-zeylanicus','native');
 insert into _seed_checklist values ('IN-KA','chamaeleo-zeylanicus','native');
 insert into _seed_checklist values ('IN-KL','chamaeleo-zeylanicus','native');
@@ -1023,7 +1526,7 @@ insert into _seed_checklist values ('IN-RJ','chamaeleo-zeylanicus','native');
 insert into _seed_checklist values ('IN-MP','chamaeleo-zeylanicus','native');
 insert into _seed_checklist values ('IN-OR','chamaeleo-zeylanicus','native');
 insert into _seed_checklist values ('LK','chamaeleo-zeylanicus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('hemidactylus-frenatus','lizards','Common House Gecko','Hemidactylus frenatus','Gekkonidae','non','non','LC',false,false,'7–15 cm','Walls and ceilings of buildings, near lights.','Throughout India incl. islands; pantropical.','Pale grey-pink; small tubercles; chuck-chuck-chuck call at night.','Nocturnal; hunts insects at lights.','Brook’s Gecko (more tubercles, spots).','[]'::jsonb,'{"color":["grey","pink"],"pattern":"plain","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('hemidactylus-frenatus','lizards','Common House Gecko','Hemidactylus frenatus','Gekkonidae','non','non','LC',false,false,'7–15 cm','Walls and ceilings of buildings, near lights.','Throughout India incl. islands; pantropical.','Pale grey-pink; small tubercles; chuck-chuck-chuck call at night.','Nocturnal; hunts insects at lights.','Brook’s Gecko (more tubercles, spots).','[]'::jsonb,'{"color":["grey","pink"],"pattern":"plain","time":"night"}'::jsonb,'Hemidactylus','Squamata','gecko','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','hemidactylus-frenatus','native');
 insert into _seed_checklist values ('IN-AP','hemidactylus-frenatus','native');
 insert into _seed_checklist values ('IN-AS','hemidactylus-frenatus','native');
@@ -1060,7 +1563,7 @@ insert into _seed_checklist values ('IN-LD','hemidactylus-frenatus','native');
 insert into _seed_checklist values ('LK','hemidactylus-frenatus','native');
 insert into _seed_checklist values ('NP','hemidactylus-frenatus','native');
 insert into _seed_checklist values ('BD','hemidactylus-frenatus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('gekko-gecko','lizards','Tokay Gecko','Gekko gecko','Gekkonidae','non','non','LC',false,true,'20–35 cm','Tree trunks, cliffs, old buildings.','North-east India, West Bengal; South-east Asia. Heavily traded — CITES Appendix II.','Large blue-grey gecko with orange-red spots; loud “to-kay” call.','Nocturnal; bites hard.','None.','[]'::jsonb,'{"color":["blue","grey","orange"],"pattern":"spotted","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('gekko-gecko','lizards','Tokay Gecko','Gekko gecko','Gekkonidae','non','non','LC',false,true,'20–35 cm','Tree trunks, cliffs, old buildings.','North-east India, West Bengal; South-east Asia. Heavily traded — CITES Appendix II.','Large blue-grey gecko with orange-red spots; loud “to-kay” call.','Nocturnal; bites hard.','None.','[]'::jsonb,'{"color":["blue","grey","orange"],"pattern":"spotted","time":"night"}'::jsonb,'Gekko','Squamata','gecko','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','gekko-gecko','native');
 insert into _seed_checklist values ('IN-AS','gekko-gecko','native');
 insert into _seed_checklist values ('IN-AR','gekko-gecko','native');
@@ -1074,7 +1577,7 @@ insert into _seed_checklist values ('IN-WB','gekko-gecko','native');
 insert into _seed_checklist values ('BD','gekko-gecko','native');
 insert into _seed_checklist values ('NP','gekko-gecko','native');
 insert into _seed_checklist values ('BT','gekko-gecko','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('sitana-ponticeriana','lizards','Fan-throated Lizard','Sitana ponticeriana','Agamidae','non','non','LC',false,false,'12–20 cm','Open dry ground, coastal sand, laterite and scrub.','Peninsular India and Sri Lanka (several split species now recognised — check local taxonomy).','Males display a large blue, black and orange dewlap; runs on hind legs.','Diurnal; displays in the breeding season.','Sarada spp.','[]'::jsonb,'{"color":["brown"],"pattern":"spotted","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('sitana-ponticeriana','lizards','Fan-throated Lizard','Sitana ponticeriana','Agamidae','non','non','LC',false,false,'12–20 cm','Open dry ground, coastal sand, laterite and scrub.','Peninsular India and Sri Lanka (several split species now recognised — check local taxonomy).','Males display a large blue, black and orange dewlap; runs on hind legs.','Diurnal; displays in the breeding season.','Sarada spp.','[]'::jsonb,'{"color":["brown"],"pattern":"spotted","time":"day"}'::jsonb,'Sitana','Squamata','agama','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','sitana-ponticeriana','native');
 insert into _seed_checklist values ('IN-KA','sitana-ponticeriana','native');
 insert into _seed_checklist values ('IN-KL','sitana-ponticeriana','native');
@@ -1085,10 +1588,10 @@ insert into _seed_checklist values ('IN-MH','sitana-ponticeriana','native');
 insert into _seed_checklist values ('IN-GA','sitana-ponticeriana','native');
 insert into _seed_checklist values ('IN-PY','sitana-ponticeriana','native');
 insert into _seed_checklist values ('LK','sitana-ponticeriana','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('phelsuma-andamanensis','lizards','Andaman Day Gecko','Phelsuma andamanensis','Gekkonidae','non','non','LC',true,false,'10–13 cm','Coconut palms, banana plants, houses and forest edge.','Endemic to the Andaman Islands (introduced elsewhere).','Bright green with red spots on the back and a blue tint near the tail; active by day.','Diurnal; laps nectar and insects.','None in the Andamans.','[]'::jsonb,'{"color":["green","red"],"pattern":"spotted","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('phelsuma-andamanensis','lizards','Andaman Day Gecko','Phelsuma andamanensis','Gekkonidae','non','non','LC',true,false,'10–13 cm','Coconut palms, banana plants, houses and forest edge.','Endemic to the Andaman Islands (introduced elsewhere).','Bright green with red spots on the back and a blue tint near the tail; active by day.','Diurnal; laps nectar and insects.','None in the Andamans.','[]'::jsonb,'{"color":["green","red"],"pattern":"spotted","time":"day"}'::jsonb,'Phelsuma','Squamata','gecko','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','phelsuma-andamanensis','native');
 insert into _seed_checklist values ('IN-AN','phelsuma-andamanensis','endemic');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('duttaphrynus-melanostictus','frogs','Asian Common Toad','Duttaphrynus melanostictus','Bufonidae','non','poisonous','LC',false,false,'6–15 cm','Gardens, houses, fields, forest — very adaptable.','Throughout India incl. Andaman Islands (introduced); South and South-east Asia.','Warty dry skin, black-tipped warts, bony ridges on head, large parotoid glands.','Nocturnal. Parotoid glands secrete bufotoxins — poisonous to pets; wash hands after handling.','Marbled Toad.','[]'::jsonb,'{"color":["brown","yellow"],"pattern":"warty","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('duttaphrynus-melanostictus','frogs','Asian Common Toad','Duttaphrynus melanostictus','Bufonidae','non','poisonous','LC',false,false,'6–15 cm','Gardens, houses, fields, forest — very adaptable.','Throughout India incl. Andaman Islands (introduced); South and South-east Asia.','Warty dry skin, black-tipped warts, bony ridges on head, large parotoid glands.','Nocturnal. Parotoid glands secrete bufotoxins — poisonous to pets; wash hands after handling.','Marbled Toad.','[]'::jsonb,'{"color":["brown","yellow"],"pattern":"warty","time":"night"}'::jsonb,'Duttaphrynus','Anura','toad','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','duttaphrynus-melanostictus','native');
 insert into _seed_checklist values ('IN-AP','duttaphrynus-melanostictus','native');
 insert into _seed_checklist values ('IN-AS','duttaphrynus-melanostictus','native');
@@ -1124,7 +1627,7 @@ insert into _seed_checklist values ('IN-AN','duttaphrynus-melanostictus','native
 insert into _seed_checklist values ('LK','duttaphrynus-melanostictus','native');
 insert into _seed_checklist values ('NP','duttaphrynus-melanostictus','native');
 insert into _seed_checklist values ('BD','duttaphrynus-melanostictus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('hoplobatrachus-tigerinus','frogs','Indian Bullfrog','Hoplobatrachus tigerinus','Dicroglossidae','non','non','LC',false,false,'10–17 cm','Ponds, paddy fields, ditches.','Most of India; introduced to the Andamans; Nepal, Bangladesh, Pakistan.','Large olive frog with a pale mid-dorsal stripe; breeding males turn bright yellow with blue vocal sacs.','Explosive breeder after the first monsoon rains.','Jerdon’s Bullfrog.','[]'::jsonb,'{"color":["olive","yellow","green"],"pattern":"striped","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('hoplobatrachus-tigerinus','frogs','Indian Bullfrog','Hoplobatrachus tigerinus','Dicroglossidae','non','non','LC',false,false,'10–17 cm','Ponds, paddy fields, ditches.','Most of India; introduced to the Andamans; Nepal, Bangladesh, Pakistan.','Large olive frog with a pale mid-dorsal stripe; breeding males turn bright yellow with blue vocal sacs.','Explosive breeder after the first monsoon rains.','Jerdon’s Bullfrog.','[]'::jsonb,'{"color":["olive","yellow","green"],"pattern":"striped","time":"night"}'::jsonb,'Hoplobatrachus','Anura','frog','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','hoplobatrachus-tigerinus','native');
 insert into _seed_checklist values ('IN-AP','hoplobatrachus-tigerinus','native');
 insert into _seed_checklist values ('IN-AS','hoplobatrachus-tigerinus','native');
@@ -1159,19 +1662,19 @@ insert into _seed_checklist values ('IN-SK','hoplobatrachus-tigerinus','native')
 insert into _seed_checklist values ('IN-AN','hoplobatrachus-tigerinus','native');
 insert into _seed_checklist values ('NP','hoplobatrachus-tigerinus','native');
 insert into _seed_checklist values ('BD','hoplobatrachus-tigerinus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('nasikabatrachus-sahyadrensis','frogs','Indian Purple Frog','Nasikabatrachus sahyadrensis','Nasikabatrachidae','non','non','EN',true,true,'5–9 cm','Burrows underground near seasonal streams in the Western Ghats; surfaces only a few days a year to breed.','Endemic to the Western Ghats (Kerala, Tamil Nadu, Karnataka).','Bloated purple-grey body, tiny head and pointed white snout.','Fossorial; eats termites.','Bhupathy’s Purple Frog (Nasikabatrachus bhupathi).','[]'::jsonb,'{"color":["purple","grey"],"pattern":"plain","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('nasikabatrachus-sahyadrensis','frogs','Indian Purple Frog','Nasikabatrachus sahyadrensis','Nasikabatrachidae','non','non','EN',true,true,'5–9 cm','Burrows underground near seasonal streams in the Western Ghats; surfaces only a few days a year to breed.','Endemic to the Western Ghats (Kerala, Tamil Nadu, Karnataka).','Bloated purple-grey body, tiny head and pointed white snout.','Fossorial; eats termites.','Bhupathy’s Purple Frog (Nasikabatrachus bhupathi).','[]'::jsonb,'{"color":["purple","grey"],"pattern":"plain","time":"night"}'::jsonb,'Nasikabatrachus','Anura','frog','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','nasikabatrachus-sahyadrensis','native');
 insert into _seed_checklist values ('IN-KL','nasikabatrachus-sahyadrensis','endemic');
 insert into _seed_checklist values ('IN-TN','nasikabatrachus-sahyadrensis','endemic');
 insert into _seed_checklist values ('IN-KA','nasikabatrachus-sahyadrensis','endemic');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('rhacophorus-malabaricus','frogs','Malabar Gliding Frog','Rhacophorus malabaricus','Rhacophoridae','non','non','LC',true,false,'7–10 cm','Evergreen and moist forest canopy; breeds over pools, building foam nests on leaves.','Endemic to the Western Ghats.','Bright green with large red-orange webbed feet used for gliding.','Nocturnal, arboreal.','Other Rhacophorus spp.','[]'::jsonb,'{"color":["green","red"],"pattern":"plain","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('rhacophorus-malabaricus','frogs','Malabar Gliding Frog','Rhacophorus malabaricus','Rhacophoridae','non','non','LC',true,false,'7–10 cm','Evergreen and moist forest canopy; breeds over pools, building foam nests on leaves.','Endemic to the Western Ghats.','Bright green with large red-orange webbed feet used for gliding.','Nocturnal, arboreal.','Other Rhacophorus spp.','[]'::jsonb,'{"color":["green","red"],"pattern":"plain","time":"night"}'::jsonb,'Rhacophorus','Anura','frog','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','rhacophorus-malabaricus','native');
 insert into _seed_checklist values ('IN-KL','rhacophorus-malabaricus','endemic');
 insert into _seed_checklist values ('IN-KA','rhacophorus-malabaricus','endemic');
 insert into _seed_checklist values ('IN-TN','rhacophorus-malabaricus','endemic');
 insert into _seed_checklist values ('IN-GA','rhacophorus-malabaricus','endemic');
 insert into _seed_checklist values ('IN-MH','rhacophorus-malabaricus','endemic');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('polypedates-maculatus','frogs','Common Indian Tree Frog','Polypedates maculatus','Rhacophoridae','non','non','LC',false,false,'5–8 cm','Houses, bathrooms, gardens, forest edges.','Most of India, Sri Lanka, Nepal, Bangladesh.','Smooth buff-brown skin, large toe-discs, yellow-spotted inner thighs.','Nocturnal; lays eggs in foam nests above water.','Polypedates leucomystax (NE India).','[]'::jsonb,'{"color":["brown","grey"],"pattern":"plain","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('polypedates-maculatus','frogs','Common Indian Tree Frog','Polypedates maculatus','Rhacophoridae','non','non','LC',false,false,'5–8 cm','Houses, bathrooms, gardens, forest edges.','Most of India, Sri Lanka, Nepal, Bangladesh.','Smooth buff-brown skin, large toe-discs, yellow-spotted inner thighs.','Nocturnal; lays eggs in foam nests above water.','Polypedates leucomystax (NE India).','[]'::jsonb,'{"color":["brown","grey"],"pattern":"plain","time":"night"}'::jsonb,'Polypedates','Anura','frog','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','polypedates-maculatus','native');
 insert into _seed_checklist values ('IN-AP','polypedates-maculatus','native');
 insert into _seed_checklist values ('IN-AS','polypedates-maculatus','native');
@@ -1199,7 +1702,7 @@ insert into _seed_checklist values ('IN-CH','polypedates-maculatus','native');
 insert into _seed_checklist values ('LK','polypedates-maculatus','native');
 insert into _seed_checklist values ('NP','polypedates-maculatus','native');
 insert into _seed_checklist values ('BD','polypedates-maculatus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('crocodylus-palustris','turtles','Mugger Crocodile','Crocodylus palustris','Crocodylidae','non','non','VU',false,true,'2–4 m','Rivers, lakes, reservoirs and marshes (freshwater).','Most of India except the north-east; Sri Lanka, Nepal, Pakistan, Iran.','Broad snout (broadest of living crocodiles); olive-grey; no ridges in front of eyes.','Can be dangerous; keep distance from banks.','Saltwater Crocodile (narrower snout, coastal).','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"any"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('crocodylus-palustris','turtles','Mugger Crocodile','Crocodylus palustris','Crocodylidae','non','non','VU',false,true,'2–4 m','Rivers, lakes, reservoirs and marshes (freshwater).','Most of India except the north-east; Sri Lanka, Nepal, Pakistan, Iran.','Broad snout (broadest of living crocodiles); olive-grey; no ridges in front of eyes.','Can be dangerous; keep distance from banks.','Saltwater Crocodile (narrower snout, coastal).','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"any"}'::jsonb,'Crocodylus','Crocodylia','crocodilian','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','crocodylus-palustris','native');
 insert into _seed_checklist values ('IN-GJ','crocodylus-palustris','native');
 insert into _seed_checklist values ('IN-RJ','crocodylus-palustris','native');
@@ -1217,14 +1720,14 @@ insert into _seed_checklist values ('IN-GA','crocodylus-palustris','native');
 insert into _seed_checklist values ('IN-CT','crocodylus-palustris','native');
 insert into _seed_checklist values ('LK','crocodylus-palustris','native');
 insert into _seed_checklist values ('NP','crocodylus-palustris','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('crocodylus-porosus','turtles','Saltwater Crocodile','Crocodylus porosus','Crocodylidae','non','non','LC',false,true,'3–6 m','Mangroves, estuaries, tidal creeks, coastal sea.','Bhitarkanika (Odisha), Sundarbans (West Bengal), Andaman & Nicobar Islands.','Massive; ridges from eyes along snout; few or no enlarged scales behind the head.','Dangerous. Never swim in creeks in the Andamans or Sundarbans.','Mugger (broader snout, freshwater).','[]'::jsonb,'{"color":["olive","grey","yellow"],"pattern":"plain","time":"any"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('crocodylus-porosus','turtles','Saltwater Crocodile','Crocodylus porosus','Crocodylidae','non','non','LC',false,true,'3–6 m','Mangroves, estuaries, tidal creeks, coastal sea.','Bhitarkanika (Odisha), Sundarbans (West Bengal), Andaman & Nicobar Islands.','Massive; ridges from eyes along snout; few or no enlarged scales behind the head.','Dangerous. Never swim in creeks in the Andamans or Sundarbans.','Mugger (broader snout, freshwater).','[]'::jsonb,'{"color":["olive","grey","yellow"],"pattern":"plain","time":"any"}'::jsonb,'Crocodylus','Crocodylia','crocodilian','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','crocodylus-porosus','native');
 insert into _seed_checklist values ('IN-OR','crocodylus-porosus','native');
 insert into _seed_checklist values ('IN-WB','crocodylus-porosus','native');
 insert into _seed_checklist values ('IN-AN','crocodylus-porosus','native');
 insert into _seed_checklist values ('BD','crocodylus-porosus','native');
 insert into _seed_checklist values ('LK','crocodylus-porosus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('gavialis-gangeticus','turtles','Gharial','Gavialis gangeticus','Gavialidae','non','non','CR',false,true,'3.5–6 m','Deep, fast-flowing rivers with sandbanks for basking and nesting.','Chambal, Girwa, Gandak, Son and Ramganga rivers; Nepal.','Extremely long, thin snout; adult males carry a bulbous “ghara” at the snout tip.','Fish-eater; harmless to people.','None.','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('gavialis-gangeticus','turtles','Gharial','Gavialis gangeticus','Gavialidae','non','non','CR',false,true,'3.5–6 m','Deep, fast-flowing rivers with sandbanks for basking and nesting.','Chambal, Girwa, Gandak, Son and Ramganga rivers; Nepal.','Extremely long, thin snout; adult males carry a bulbous “ghara” at the snout tip.','Fish-eater; harmless to people.','None.','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"day"}'::jsonb,'Gavialis','Crocodylia','crocodilian','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','gavialis-gangeticus','native');
 insert into _seed_checklist values ('IN-MP','gavialis-gangeticus','native');
 insert into _seed_checklist values ('IN-RJ','gavialis-gangeticus','native');
@@ -1232,7 +1735,7 @@ insert into _seed_checklist values ('IN-UP','gavialis-gangeticus','native');
 insert into _seed_checklist values ('IN-BR','gavialis-gangeticus','native');
 insert into _seed_checklist values ('IN-UT','gavialis-gangeticus','native');
 insert into _seed_checklist values ('NP','gavialis-gangeticus','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('geochelone-elegans','turtles','Indian Star Tortoise','Geochelone elegans','Testudinidae','non','non','VU',false,true,'15–28 cm carapace','Dry scrub, grassland and thorn forest.','North-west (Gujarat, Rajasthan), south-east India and Sri Lanka. CITES Appendix I — one of the most trafficked tortoises.','Domed shell with raised scutes, each with a yellow star-radiating pattern on black.','Active after rain, early morning and evening.','None.','[]'::jsonb,'{"color":["yellow","black"],"pattern":"star","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('geochelone-elegans','turtles','Indian Star Tortoise','Geochelone elegans','Testudinidae','non','non','VU',false,true,'15–28 cm carapace','Dry scrub, grassland and thorn forest.','North-west (Gujarat, Rajasthan), south-east India and Sri Lanka. CITES Appendix I — one of the most trafficked tortoises.','Domed shell with raised scutes, each with a yellow star-radiating pattern on black.','Active after rain, early morning and evening.','None.','[]'::jsonb,'{"color":["yellow","black"],"pattern":"star","time":"day"}'::jsonb,'Geochelone','Testudines','tortoise','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','geochelone-elegans','native');
 insert into _seed_checklist values ('IN-GJ','geochelone-elegans','native');
 insert into _seed_checklist values ('IN-RJ','geochelone-elegans','native');
@@ -1241,7 +1744,7 @@ insert into _seed_checklist values ('IN-TN','geochelone-elegans','native');
 insert into _seed_checklist values ('IN-KA','geochelone-elegans','native');
 insert into _seed_checklist values ('IN-TG','geochelone-elegans','native');
 insert into _seed_checklist values ('LK','geochelone-elegans','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('lissemys-punctata','turtles','Indian Flapshell Turtle','Lissemys punctata','Trionychidae','non','non','VU',false,false,'20–35 cm carapace','Ponds, tanks, canals, rivers — even temporary water.','Throughout mainland India; Sri Lanka, Nepal, Bangladesh, Pakistan.','Soft-shelled with skin flaps on the plastron that close over the hind limbs; olive with yellow spots.','Aestivates in mud during dry season.','Indian Softshell Turtle (Nilssonia gangetica, no flaps).','[]'::jsonb,'{"color":["olive","yellow"],"pattern":"spotted","time":"any"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('lissemys-punctata','turtles','Indian Flapshell Turtle','Lissemys punctata','Trionychidae','non','non','VU',false,false,'20–35 cm carapace','Ponds, tanks, canals, rivers — even temporary water.','Throughout mainland India; Sri Lanka, Nepal, Bangladesh, Pakistan.','Soft-shelled with skin flaps on the plastron that close over the hind limbs; olive with yellow spots.','Aestivates in mud during dry season.','Indian Softshell Turtle (Nilssonia gangetica, no flaps).','[]'::jsonb,'{"color":["olive","yellow"],"pattern":"spotted","time":"any"}'::jsonb,'Lissemys','Testudines','turtle','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','lissemys-punctata','native');
 insert into _seed_checklist values ('IN-AP','lissemys-punctata','native');
 insert into _seed_checklist values ('IN-AS','lissemys-punctata','native');
@@ -1269,7 +1772,7 @@ insert into _seed_checklist values ('IN-CH','lissemys-punctata','native');
 insert into _seed_checklist values ('LK','lissemys-punctata','native');
 insert into _seed_checklist values ('NP','lissemys-punctata','native');
 insert into _seed_checklist values ('BD','lissemys-punctata','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('lepidochelys-olivacea','turtles','Olive Ridley Sea Turtle','Lepidochelys olivacea','Cheloniidae','non','non','VU',false,true,'60–70 cm carapace','Open ocean; nests on sandy beaches in mass arribadas.','All Indian coasts; mass nesting at Gahirmatha, Rushikulya and Devi (Odisha).','Small, olive heart-shaped shell with 5+ pairs of costal scutes.','Report stranded or dead turtles to the Forest Department.','Green Turtle (4 pairs of costal scutes).','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('lepidochelys-olivacea','turtles','Olive Ridley Sea Turtle','Lepidochelys olivacea','Cheloniidae','non','non','VU',false,true,'60–70 cm carapace','Open ocean; nests on sandy beaches in mass arribadas.','All Indian coasts; mass nesting at Gahirmatha, Rushikulya and Devi (Odisha).','Small, olive heart-shaped shell with 5+ pairs of costal scutes.','Report stranded or dead turtles to the Forest Department.','Green Turtle (4 pairs of costal scutes).','[]'::jsonb,'{"color":["olive","grey"],"pattern":"plain","time":"night"}'::jsonb,'Lepidochelys','Testudines','turtle','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','lepidochelys-olivacea','native');
 insert into _seed_checklist values ('IN-OR','lepidochelys-olivacea','native');
 insert into _seed_checklist values ('IN-AP','lepidochelys-olivacea','native');
@@ -1285,11 +1788,11 @@ insert into _seed_checklist values ('IN-LD','lepidochelys-olivacea','native');
 insert into _seed_checklist values ('IN-PY','lepidochelys-olivacea','native');
 insert into _seed_checklist values ('LK','lepidochelys-olivacea','native');
 insert into _seed_checklist values ('BD','lepidochelys-olivacea','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('dermochelys-coriacea','turtles','Leatherback Sea Turtle','Dermochelys coriacea','Dermochelyidae','non','non','VU',false,true,'1.5–2 m carapace','Open ocean; nests on high-energy beaches.','Nests in Great & Little Nicobar and Little Andaman; rare on mainland coasts.','Largest turtle; leathery black shell with seven longitudinal ridges and white spots.','Feeds on jellyfish; threatened by plastic.','None.','[]'::jsonb,'{"color":["black"],"pattern":"spotted","time":"night"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('dermochelys-coriacea','turtles','Leatherback Sea Turtle','Dermochelys coriacea','Dermochelyidae','non','non','VU',false,true,'1.5–2 m carapace','Open ocean; nests on high-energy beaches.','Nests in Great & Little Nicobar and Little Andaman; rare on mainland coasts.','Largest turtle; leathery black shell with seven longitudinal ridges and white spots.','Feeds on jellyfish; threatened by plastic.','None.','[]'::jsonb,'{"color":["black"],"pattern":"spotted","time":"night"}'::jsonb,'Dermochelys','Testudines','turtle','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','dermochelys-coriacea','native');
 insert into _seed_checklist values ('IN-AN','dermochelys-coriacea','native');
 insert into _seed_checklist values ('LK','dermochelys-coriacea','native');
-insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits) values ('batagur-baska','turtles','Northern River Terrapin','Batagur baska','Geoemydidae','non','non','CR',false,true,'50–60 cm carapace','Tidal rivers and mangrove creeks.','Sundarbans (West Bengal, Bangladesh) and Odisha.','Large hard-shelled terrapin; breeding males turn black with a crimson head.','Among the world’s rarest turtles.','None.','[]'::jsonb,'{"color":["grey","black"],"pattern":"plain","time":"day"}'::jsonb) on conflict (id) do nothing;
+insert into public.species (id,pack_id,common_name,scientific_name,family,venom,toxic,iucn,endemic,sensitive,size,habitat,distribution,id_notes,behaviour,similar_species,images,traits,genus,order_name,taxon_group,refs) values ('batagur-baska','turtles','Northern River Terrapin','Batagur baska','Geoemydidae','non','non','CR',false,true,'50–60 cm carapace','Tidal rivers and mangrove creeks.','Sundarbans (West Bengal, Bangladesh) and Odisha.','Large hard-shelled terrapin; breeding males turn black with a crimson head.','Among the world’s rarest turtles.','None.','[]'::jsonb,'{"color":["grey","black"],"pattern":"plain","time":"day"}'::jsonb,'Batagur','Testudines','turtle','Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.') on conflict (id) do update set genus = coalesce(nullif(species.genus,''), excluded.genus), order_name = coalesce(nullif(species.order_name,''), excluded.order_name), taxon_group = coalesce(nullif(species.taxon_group,''), excluded.taxon_group), refs = coalesce(nullif(species.refs,''), excluded.refs);
 insert into _seed_checklist values ('IN','batagur-baska','native');
 insert into _seed_checklist values ('IN-WB','batagur-baska','native');
 insert into _seed_checklist values ('IN-OR','batagur-baska','native');
@@ -1537,3 +2040,132 @@ exception when others then return new;
 end $$;
 drop trigger if exists access_from_signup on public.profiles;
 create trigger access_from_signup after insert on public.profiles for each row execute function public.access_from_signup();
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- SOLE ADMIN: the platform owner is the only Admin, enforced in the database.
+--   • nobody can become Admin from the app (no claim, no request, no grant)
+--   • the owner cannot be demoted, suspended or deleted from the app
+--   • ownership can only be set from the Supabase SQL Editor:
+--       select public.set_platform_owner('you@example.com');
+-- ═══════════════════════════════════════════════════════════════════════════
+create table if not exists public.platform_owner (
+  singleton boolean primary key default true check (singleton),
+  user_id   uuid not null unique references auth.users(id),
+  set_at    timestamptz not null default now()
+);
+alter table public.platform_owner enable row level security;
+drop policy if exists "owner: read" on public.platform_owner;
+create policy "owner: read" on public.platform_owner for select to authenticated using (true);
+
+-- adopt the existing admin as owner (earliest one); any other admins become reviewers
+do $$
+declare first_admin uuid;
+begin
+  if not exists (select 1 from public.platform_owner) then
+    select p.id into first_admin from public.profiles p where p.role = 'admin' order by p.created_at nulls last limit 1;
+    if first_admin is not null then insert into public.platform_owner (user_id) values (first_admin); end if;
+  end if;
+  perform set_config('hw.owner_tx', 'on', true);
+  update public.profiles set role = 'reviewer' where role = 'admin' and id <> coalesce((select user_id from public.platform_owner), '00000000-0000-0000-0000-000000000000');
+end $$;
+
+-- Admin = the platform owner. Nothing else.
+create or replace function public.is_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select auth.uid() is not null and exists (select 1 from public.platform_owner o where o.user_id = auth.uid());
+$$;
+create or replace function public.is_reviewer() returns boolean
+language sql security definer stable set search_path = public as $$
+  select public.is_admin() or exists (select 1 from public.profiles where id = auth.uid() and role = 'reviewer' and status = 'approved');
+$$;
+create or replace function public.has_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from public.platform_owner);
+$$;
+
+create or replace function public.guard_profile() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare owner uuid := (select user_id from public.platform_owner);
+begin
+  -- 1. only the platform owner may ever hold the admin role
+  if new.role = 'admin' and new.id is distinct from owner then
+    raise exception 'Only the platform owner can be Admin.' using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' then
+    -- 2. the owner account cannot be demoted or suspended from the app
+    if old.id = owner and auth.uid() is not null and (new.role <> 'admin' or new.status <> 'approved') then
+      raise exception 'The platform owner account cannot be demoted or suspended.' using errcode = '42501';
+    end if;
+    -- 3. only the Admin changes roles or account status
+    if auth.uid() is not null and not public.is_admin()
+       and (new.role is distinct from old.role or new.status is distinct from old.status) then
+      raise exception 'Only the Admin changes roles or account status.' using errcode = '42501';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_profile on public.profiles;
+create trigger guard_profile before insert or update on public.profiles for each row execute function public.guard_profile();
+
+create or replace function public.guard_owner_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.id = (select user_id from public.platform_owner) and auth.uid() is not null then
+    raise exception 'The platform owner account cannot be deleted from the app.' using errcode = '42501';
+  end if;
+  return old;
+end $$;
+drop trigger if exists guard_owner_delete on public.profiles;
+create trigger guard_owner_delete before delete on public.profiles for each row execute function public.guard_owner_delete();
+
+-- SQL Editor only: set / transfer platform ownership
+create or replace function public.set_platform_owner(p_email text) returns text
+language plpgsql security definer set search_path = public as $$
+declare uid uuid; prev uuid;
+begin
+  if auth.uid() is not null then raise exception 'Run this from the Supabase SQL Editor only.' using errcode = '42501'; end if;
+  select id into uid from auth.users where lower(email) = lower(trim(p_email));
+  if uid is null then raise exception 'No account with e-mail % (sign up in the app first).', p_email; end if;
+  perform public.create_profile_for(uid);
+  select user_id into prev from public.platform_owner;
+  update public.profiles set role = 'reviewer' where role = 'admin' and id <> uid;
+  delete from public.platform_owner;
+  insert into public.platform_owner (user_id) values (uid);
+  update public.profiles set role = 'admin', status = 'approved' where id = uid;
+  return format('%s is now the platform owner and sole Admin%s', p_email, case when prev is not null and prev <> uid then ' (previous owner is now a reviewer)' else '' end);
+end $$;
+revoke all on function public.set_platform_owner(text) from public, anon, authenticated;
+
+-- the first-admin shortcut is gone: ownership is set only from the SQL Editor
+drop function if exists public.claim_first_admin();
+
+-- access requests: reviewer only
+update public.access_requests set requested_role = 'reviewer' where requested_role = 'admin';
+do $$ begin
+  if exists (select 1 from pg_constraint where conname = 'access_requests_requested_role_check') then
+    alter table public.access_requests drop constraint access_requests_requested_role_check;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'access_requests_reviewer_only') then
+    alter table public.access_requests add constraint access_requests_reviewer_only check (requested_role = 'reviewer');
+  end if;
+end $$;
+create or replace function public.request_access(p_role text, p_note text default '') returns public.access_requests
+language plpgsql security definer set search_path = public as $$
+declare r public.access_requests;
+begin
+  if auth.uid() is null then raise exception 'sign in first'; end if;
+  if p_role <> 'reviewer' then raise exception 'Only reviewer access can be requested. The Admin role belongs to the platform owner.' using errcode = '42501'; end if;
+  update public.access_requests set note = left(coalesce(p_note, ''), 500), created_at = now()
+   where user_id = auth.uid() and status = 'pending' returning * into r;
+  if r.id is null then insert into public.access_requests (user_id, requested_role, note) values (auth.uid(), 'reviewer', left(coalesce(p_note, ''), 500)) returning * into r; end if;
+  return r;
+end $$;
+create or replace function public.access_from_signup() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (select raw_user_meta_data->>'requested_role' from auth.users where id = new.id) in ('reviewer', 'admin') then
+    insert into public.access_requests (user_id, requested_role, note) values (new.id, 'reviewer', 'Requested at sign-up') on conflict do nothing;
+  end if;
+  return new;
+exception when others then return new;
+end $$;

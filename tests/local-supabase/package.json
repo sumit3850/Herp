@@ -1,0 +1,12 @@
+{
+  "name": "herpwatch-local-supabase",
+  "private": true,
+  "type": "module",
+  "description": "Test-only stand-in for Supabase (auth + REST + storage) on a real Postgres with the real schema and RLS",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

@@ -17,7 +17,8 @@ const blank = (pack: string): Species => ({ id: "", pack, common: "", sci: "", f
 const slug = (sci: string) => sci.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
 
 export function SpeciesPage({ startNew }: { startNew?: boolean }) {
-  const { species, packs, hw, reload, isAdmin } = useData();
+  const { species, packs, hw, reload, isAdmin, me } = useData();
+  const isReviewer = me.role === "reviewer";
   const act = useAction();
   const [q, setQ] = React.useState("");
   const [pack, setPack] = React.useState("");
@@ -31,7 +32,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Species catalogue"
-        description={`${species.length} species. Edits appear in the field guide, the Identify helper and the checklists.`}
+        description={isAdmin ? `${species.length} species. Edits appear in the field guide, the Identify helper and the checklists.` : `${species.length} species. As a reviewer you can update distribution, habitat, endemism, conservation status, reference photos and references. Taxonomy changes and new species go to the Admin as proposals.`}
         actions={isAdmin && <>
           <Button variant="outline" onClick={() => hw.util.download("species.csv", hw.util.toCSV(species.map((s) => ({ ...s, regions: s.regions.join(" "), images: (s.images || []).map((i) => (typeof i === "string" ? i : i.url)).join(" "), traits: JSON.stringify(s.traits || {}) }))))}><Download /> CSV</Button>
           <Button variant="outline" onClick={() => setImporting(true)}><Upload /> Bulk import</Button>
@@ -58,6 +59,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
                   <TableCell className="text-right font-mono text-sm">{s.regions?.length || 0}</TableCell>
                   <TableCell className="text-right font-mono text-sm">{s.images?.length || 0}</TableCell>
                   <TableCell className="text-right">
+                    {isReviewer && <Button size="sm" variant="ghost" title="Update distribution, conservation, photos" onClick={() => setEdit(s)}><Pencil /> Annotate</Button>}
                     {isAdmin && <div className="flex justify-end gap-1">
                       <Button size="icon" variant="ghost" className="size-8" title="Edit" onClick={() => setEdit(s)}><Pencil /></Button>
                       <Button size="icon" variant="ghost" className="size-8 hover:text-destructive" title="Delete" onClick={() => { if (confirm(`Delete ${s.common}? It is removed from every checklist; past sightings keep their record but lose the link.`)) act(async () => { await hw.api.admin.deleteSpecies(s.id); await reload(["catalog"]); }, "Species deleted"); }}><Trash2 /></Button>
@@ -78,7 +80,8 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
 const F = ({ id, label, children }: { id: string; label: string; children: React.ReactNode }) => <div className="grid gap-1.5"><Label htmlFor={id}>{label}</Label>{children}</div>;
 
 function SpeciesForm({ initial, onClose }: { initial: Species; onClose: () => void }) {
-  const { packs, hw, reload } = useData();
+  const { packs, hw, reload, isAdmin } = useData();
+  const tax = !isAdmin;   // reviewers: taxonomy is read-only
   const act = useAction();
   const [s, setS] = React.useState<Species>(initial);
   const [images, setImages] = React.useState((initial.images || []).map((i) => (typeof i === "string" ? i : [i.url, i.credit, i.license].filter(Boolean).join(" | "))).join("\n"));
@@ -90,21 +93,29 @@ function SpeciesForm({ initial, onClose }: { initial: Species; onClose: () => vo
     if (!s.common.trim() || !s.sci.trim()) return alert("Common and scientific names are required.");
     const out: Species = { ...s, id: s.id || slug(s.sci), common: s.common.trim(), sci: s.sci.trim(),
       images: images.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [url, credit, license] = l.split("|").map((x) => x.trim()); return { url, credit: credit || "", license: license || "" }; }) };
+    if (!isAdmin) {
+      act(async () => { await hw.api.admin.annotateSpecies(out.id, { distribution: out.distribution, habitat: out.habitat, endemic: out.endemic, iucn: out.iucn, sensitive: out.sensitive, images: out.images, refs: out.refs, id_notes: out.id_notes, behaviour: out.behaviour, similar_species: out.similar }); await reload(["catalog"]); onClose(); }, "Species updated");
+      return;
+    }
     act(async () => { await hw.api.admin.upsertSpecies(out); await reload(["catalog"]); onClose(); }, "Species saved");
   };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl">
-        <DialogHeader><DialogTitle>{initial.id ? `Edit ${initial.common}` : "Add species"}</DialogTitle><DialogDescription>Where it occurs is managed on the Core checklists page.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>{initial.id ? `Edit ${initial.common}` : "Add species"}</DialogTitle><DialogDescription>{tax ? "Taxonomy (names, family, genus, order, safety) is Admin-only: use Proposals to suggest a change." : "Where it occurs is managed on the Core checklists page."}</DialogDescription></DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
-          <F id="sf-common" label="Common name *"><Input id="sf-common" value={s.common} onChange={(e) => set("common", e.target.value)} /></F>
-          <F id="sf-sci" label="Scientific name *"><Input id="sf-sci" className="italic" value={s.sci} onChange={(e) => set("sci", e.target.value)} /></F>
-          <F id="sf-family" label="Family"><Input id="sf-family" value={s.family} onChange={(e) => set("family", e.target.value)} /></F>
-          <F id="sf-pack" label="Group (pack)"><NativeSelect id="sf-pack" value={s.pack} onChange={(e) => set("pack", e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect></F>
+          <F id="sf-common" label="Common name *"><Input disabled={tax} id="sf-common" value={s.common} onChange={(e) => set("common", e.target.value)} /></F>
+          <F id="sf-sci" label="Scientific name *"><Input disabled={tax} id="sf-sci" className="italic" value={s.sci} onChange={(e) => set("sci", e.target.value)} /></F>
+          <F id="sf-family" label="Family"><Input disabled={tax} id="sf-family" value={s.family} onChange={(e) => set("family", e.target.value)} /></F>
+          <F id="sf-pack" label="Group (pack)"><NativeSelect disabled={tax} id="sf-pack" value={s.pack} onChange={(e) => set("pack", e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect></F>
           <F id="sf-iucn" label="IUCN status"><NativeSelect id="sf-iucn" value={s.iucn} onChange={(e) => set("iucn", e.target.value as Species["iucn"])}>{Object.entries(hw.IUCN).map(([k, v]) => <option key={k} value={k}>{k} · {v.name}</option>)}</NativeSelect></F>
-          <F id="sf-venom" label="Venom"><NativeSelect id="sf-venom" value={s.venom} onChange={(e) => set("venom", e.target.value as Species["venom"])}>{Object.entries(hw.VENOM).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</NativeSelect></F>
-          <F id="sf-toxic" label="Poisonous?"><NativeSelect id="sf-toxic" value={s.toxic} onChange={(e) => set("toxic", e.target.value as Species["toxic"])}><option value="non">Non-poisonous</option><option value="poisonous">Poisonous (skin / secretions)</option></NativeSelect></F>
+          <F id="sf-venom" label="Venom"><NativeSelect disabled={tax} id="sf-venom" value={s.venom} onChange={(e) => set("venom", e.target.value as Species["venom"])}>{Object.entries(hw.VENOM).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</NativeSelect></F>
+          <F id="sf-toxic" label="Poisonous?"><NativeSelect disabled={tax} id="sf-toxic" value={s.toxic} onChange={(e) => set("toxic", e.target.value as Species["toxic"])}><option value="non">Non-poisonous</option><option value="poisonous">Poisonous (skin / secretions)</option></NativeSelect></F>
+          <F id="sf-genus" label="Genus"><Input disabled={tax} id="sf-genus" className="italic" value={s.genus || ""} onChange={(e) => set("genus", e.target.value)} placeholder={(s.sci || "").split(" ")[0]} /></F>
+          <F id="sf-order" label="Order"><Input disabled={tax} id="sf-order" value={s.order || ""} onChange={(e) => set("order", e.target.value)} placeholder="Squamata, Anura, Testudines…" /></F>
+          <F id="sf-group" label="Group"><NativeSelect disabled={tax} id="sf-group" value={s.group || ""} onChange={(e) => set("group", e.target.value)}><option value="">—</option>{Object.entries(hw.GROUPS || {}).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect></F>
+          <F id="sf-auth" label="Authority"><Input disabled={tax} id="sf-auth" value={s.authority || ""} onChange={(e) => set("authority", e.target.value)} placeholder="(Linnaeus, 1758)" /></F>
           <F id="sf-size" label="Size"><Input id="sf-size" value={s.size || ""} onChange={(e) => set("size", e.target.value)} /></F>
         </div>
         <div className="flex flex-wrap gap-6 text-sm">
@@ -113,6 +124,7 @@ function SpeciesForm({ initial, onClose }: { initial: Species; onClose: () => vo
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           {area("id_notes", "Identification notes")}{area("habitat", "Habitat")}{area("distribution", "Distribution notes")}{area("behaviour", "Behaviour / safety notes")}{area("similar", "Similar species")}
+          <F id="sf-refs" label="References (sources)"><Textarea id="sf-refs" rows={2} value={s.refs || ""} onChange={(e) => set("refs", e.target.value)} placeholder="Author (year). Title. Journal…" /></F>
           <F id="sf-img" label="Images: url | credit | licence (one per line)"><Textarea id="sf-img" rows={2} value={images} onChange={(e) => setImages(e.target.value)} placeholder="https://… | © Name | CC BY-SA 4.0" /></F>
         </div>
         <div className="grid gap-4 sm:grid-cols-3">

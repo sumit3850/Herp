@@ -1,76 +1,62 @@
 # HerpWatch
 
-A field guide, sightings recorder and road-kill logger for the **reptiles and amphibians** of India, organised by state and country.
-
-It combines a field guide, a guided identification helper, eBird-style checklists and a road-kill logger. Users pay only for the species groups they need, either for one state or for the whole country.
+A field recording and species documentation platform for the **reptiles and amphibians** of India: herping sessions with GPS tracks, observations with photos, regional checklists down to districts and islands, expert review and a public map.
 
 | Surface | File | Who |
 |---|---|---|
+| **Field app** (installable, works offline) | `app.html` + `app.js` | Everyone with an account |
 | **Website + live data report** | `index.html` | Public |
-| **Field app** (installable PWA) | `app.html` | Signed-in users |
-| **Admin dashboard** (React + TypeScript + Tailwind + shadcn/ui) | `dashboard/` → served at `/dashboard/` | Admins & reviewers |
-| Classic admin console (no build step) | `admin-classic.html` | Admins |
+| **Dashboard** (React + TypeScript + Tailwind + shadcn/ui) | `dashboard/` → served at `/dashboard/` | Reviewers and the Admin |
 
-## Features
+## Roles
 
-**Field guide.** Each species has a photo gallery, *Common name (Scientific name)*, family, IUCN Red List status, and flags for venomous, mildly venomous, non-venomous, poisonous and endemic. Entries also cover ID notes, size, habitat, distribution notes, behaviour and similar species. The list is filtered to the selected state's checklist and can be searched or filtered by venomous, poisonous, threatened or endemic.
+| Role | Can |
+|---|---|
+| **User** (observer) | Record sessions and observations, edit or delete their own unverified records, reply to reviewers, see checklists, maps, life list and stats, export their data. |
+| **Reviewer** | Everything a user can, plus: verify, reject, ask for more information, mark “needs identification”, suggest or change an identification, mark duplicates, comment; add species to regional checklists; update distribution, endemism, conservation status, reference photos and references; propose new species, taxonomy corrections and regional checklists. |
+| **Admin** (platform owner) | Everything, plus: user management (assign/revoke Reviewer, suspend), species and taxonomy, regions, approving reviewer proposals, deleting records, platform settings, full export and audit log. |
 
-**Paid packs.** There are four packs: 🐍 Snakes · 🦎 Lizards & Geckos · 🐸 Frogs & Toads · 🐢 Turtles & Crocodiles. Each can be bought for **one state** or **the whole country**.
-- **Free:** species names, safety flags, snakebite first aid, and all recording.
-- **Paid:** photos, full field notes, offline download and the Identify helper.
-- **Payments:** handled by Razorpay. The price is worked out on the server, and access is granted only by the payment webhook. The phone is never trusted.
+**There is exactly one Admin: the platform owner.** The database enforces this (`platform_owner` table, `is_admin()`, the `guard_profile` trigger): no user or reviewer can become Admin, request it, or grant it, through the app or the API. Ownership can only be set or transferred in the Supabase SQL Editor with `select public.set_platform_owner('email');`. When an older database is upgraded, the earliest existing admin becomes the owner automatically and any other admins become reviewers.
 
-**Identify.** A step-by-step helper: pick the group, then colours, pattern and time of day. It ranks likely species from the region's checklist and works offline.
+## Field app
 
-**Checklists (eBird-style).** Choose a protocol: incidental, stationary, traveling, night walk or area search. The app runs a timer and records a GPS track and distance. For each species you can log a count, life stage, sex, notes, photos and a location pin, and add unlisted or unidentified animals. A "complete checklist" flag records whether every detected species was reported. Recording works offline and syncs when the phone is back online.
+Six tabs: **Home · Record · Explore · Checklist · My records · Profile.**
 
-**Road-kill logger.** Start a survey (travel mode, road name, road type) and the app records the GPS track as survey effort. Tap **Road-kill here** at each carcass to log the group, species or "unidentified", count, condition, position on the road and a photo. A live map shows the track and the points, along with km covered and kills per 100 km. Data exports as CSV or GeoJSON.
+- **Home.** A large **START NEW HERPING SESSION** button (or the running session with its timer), **Add an observation without a session**, personal stats (life list, observations, sessions, hours, distance, verified records), observations per month and **your species by year** (to today’s date vs the whole year).
+- **Record (herping session).** Pick the survey type: *Day herping, Night herping, Road survey, Transect, Habitat survey, Opportunistic, Creek & mangrove, Stream & wetland*. Date and start time (adjustable), GPS position, accuracy, elevation, place name, state, district and island are captured automatically. A **Record GPS track** switch records the route continuously. Start, pause, resume, stop and save; pauses are excluded from the duration. The session survives app restarts and flat batteries.
+- **Observations.** Each keeps its own timestamp and GPS point. Fields: species (with family, genus and order shown) or free text for unidentified animals, ID confidence, evidence (direct sighting, shed skin, eggs, tracks, call, remains, photo only), count, life stage (egg, hatchling, tadpole, juvenile, subadult, adult, unknown), sex, condition (alive, road-kill, other mortality), wild or captive, habitat, microhabitat, behaviour, activity, weather, temperature, notes, several photos (with view labels and metadata) and privacy (public, restricted, private). Animals never need to be handled; the form says so.
+- **Explore.** *Nearby*: species seen in the region over the last 7/30/365 days, public records, observers, and **life / year / month targets** (species seen nearby that are missing from your lists). *Map*: public observations filtered by species, family, date, region (state, district, island) and status, with your own routes as a separate layer. *Species*: field guide with group, order, family and genus filters and grid or list view. *Identify*: step-by-step helper. *Top*: leaderboard of recorders by distinct species (all time, this year, this month; by region and group).
+- **Checklist.** Any state, UT, district, island or region. Filter by group, order, family, genus, seen or not yet recorded. **Only your own observations tick a species**; a species being on a checklist never marks it as seen. Shows first and most recent observation dates.
+- **My records.** Observations with verification status, reviewer notes, the review history and your original identification if a reviewer changed it; reply to reviewers; edit; delete unless verified. Sessions split into *On this phone* and *Uploaded*, each with a species tile, route map and GPX download. Life list with first and last dates. Export as **CSV, Excel or PDF**.
+- **Profile.** Account, sync status, species packs, apply to become a reviewer, settings (default privacy, species names as common/scientific/both, km or miles, theme), feedback, share, check for updates.
 
-**Admin.**
-- Species: add, edit, delete and bulk-import, including images, IUCN status, venom and poison flags, and identification traits.
-- Regional checklists per state or country, with a paste-scientific-names option.
-- Pack prices per region.
-- Users: role (user, reviewer, admin), block, and grant or revoke packs.
-- Sighting review: accept or reject.
-- Road-kill surveys and records, plus a map with exact locations (admins only).
-- CSV and GeoJSON exports.
+### Verification
 
-**Website.** Feature overview, pack prices and a **live report**:
-- KPI tiles
-- monthly trend
-- sightings by group, by IUCN category and by venom status
-- top species and top road-kill species
-- a distribution map with survey tracks
+Statuses: **Pending review · Verified · Needs identification · More information required · Rejected.** Every reviewer action is stored in `observation_reviews` (append-only) and the observer sees it in the app. **The original identification is never overwritten**: `original_species_id` / `original_species_text` are set when the record is created and can’t be changed. If an observer edits the species, count, place, time, evidence or life stage of a reviewed record, it goes back to *Pending*. Verified records can’t be deleted by the observer.
 
-Each chart has a table view, and the page prints to an A4 PDF.
+### Privacy
 
-**Privacy for threatened species.** Public maps round locations to about 1 km, or about 10 km for species flagged *sensitive* (traded or threatened). Exact points are visible only to the observer and to reviewers.
+- *Public*: on the public map. *Restricted*: counted in statistics, exact point hidden from the public. *Private*: only the observer and reviewers.
+- **Sensitive species** are always blurred on public maps (precision set by the Admin, default ~10 km), whatever the observer chooses.
 
-## Accounts and dashboard access
+### Offline
 
-One e-mail and password works for the field app, the Road-kill Logger and the dashboard.
+Everything is written to the phone first (localStorage, IndexedDB and the Cache API, so one cleared store doesn’t lose data). Photos taken offline are kept in IndexedDB and uploaded at sync. Records get their ID on the phone and are sent with upserts, so re-sending never creates duplicates and timestamps stay as recorded. Connectivity is judged by real requests, not `navigator.onLine`. Signed-out users can record offline and upload after signing in.
 
-- **First admin:** on a new project, the first person with a confirmed e-mail who opens the dashboard sees **Become the first admin**. The button works once only; it disappears as soon as an admin exists.
-- **Sign-up role:** the dashboard sign-up asks what you want to do: *Record sightings*, *Review records* or *Run the project*. Reviewer and admin are **requests**.
-- **Access requests:** signed-in users without access can send one from the access screen. Admins approve or decline under **Users → Access requests**. Every role change is written to the audit log.
-- **Forgot password:** the reset e-mail brings you back to a **Set a new password** screen, in both the app and the dashboard.
-- **E-mail limits:** Supabase's built-in mailer sends only a few e-mails per hour, and only to the project team. For real users, add your own SMTP server under Authentication → Emails → SMTP, or turn off "Confirm email".
+## Database
 
-## Working in the field (offline)
+`supabase/schema.sql` (one re-runnable file, also bundled into `supabase/setup.sql`):
 
-These patterns come from the Island Explorer driver app.
+| Area | Tables |
+|---|---|
+| Accounts & roles | `profiles`, `platform_owner`, `access_requests` |
+| Taxonomy & species | `species` (common/scientific name, authority, family, genus, order, group, IUCN, venom, endemic, sensitive, references, photos), `packs` |
+| Regions & checklists | `regions` (country, state, UT, district, island, region, protected area; with centre coordinates), `checklist` |
+| Field data | `trips` (sessions), `track_points`, `sightings` (observations), `photos` |
+| Review | `observation_reviews`, `reviewer_submissions` (proposals) |
+| Platform | `platform_settings`, `audit_log`, `feedback`, `pack_prices`, `entitlements`, `orders` |
 
-- **Three copies:** open checklists, open road surveys and unsynced records are kept in localStorage, IndexedDB *and* the Cache API. If a phone clears one of them, the data is restored from the others.
-- **Offline start:** the app opens and records with no signal. Signed-out users can tap **Record offline now**; their records upload to the account they sign in with later.
-- **Connectivity:** it is judged by real requests, not `navigator.onLine`. Requests time out after 15 seconds, and the queue retries every minute.
-- **Sign-in screen warnings:** it says when the app was opened inside WhatsApp, Instagram or another in-app browser, or when the browser blocks storage.
-
-## More apps and pages
-
-- **Road-kill Logger** (`roadkill.html`, `roadkill-manifest.json`): a separately installable app for survey teams that opens straight into a road survey.
-- **HerpWatch Console:** the dashboard is installable too (its own manifest and icon, plus an "Install console" button in the sidebar).
-- **Feedback** (`feedback.html`): star ratings for the guide, identification help, recording and overall, plus "report a mistake in a species page". It is linked from the app, from every species page and from the website. Admins read it under **Dashboard → Feedback**.
-- **Reject with a reason:** reviewers pick or type a reason, and the observer sees it next to the record in *My recent checklists*.
+Security is row-level security plus triggers; the apps hold only the public key. Public data comes through `public_stats`, `public_points`, `public_observations` and `public_leaderboard`, which apply the privacy rules.
 
 ## Install as an app
 
@@ -90,25 +76,15 @@ The website, field app and dashboard share one look:
 An EST-style operations dashboard built on the shadcn **App1** layout: a collapsible sidebar, KPI cards, area charts and activity feeds. It works in light and dark mode, uses a slide-in sidebar on phones, and animates between pages.
 
 - **Sign in / sign up.** Uses the `SignInPage` component, plus a matching `SignUpPage`, with the hero illustration (`assets/hero-herp.svg`) and feature highlights. *Continue with Google* uses Supabase OAuth; enable the Google provider in Supabase → Authentication.
-- **Overview.**
-  - KPIs: checklists, individuals, species, observers, items awaiting review, road-kills per 100 km.
-  - A 12-week submission chart.
-  - **Checklist coverage** for each active state: the share of the core checklist recorded so far.
-  - Recent activity.
-- **Submissions.** Every checklist and sighting submitted from the app.
-  - Filters: search, region, review status, date range.
-  - **⚑ Not on core checklist**: flags records of species that are not on that region's core checklist.
-  - Review: accept or reject each sighting or a whole checklist, or accept all pending checklists at once.
-  - Details panel: GPS track and sighting map, photos, notes.
-  - CSV export.
-- **Core checklists.** The admin edits the core checklist for any state, country or region:
-  - add and remove species, and set each one's status (*native, endemic, introduced, vagrant, uncertain*);
-  - paste a published species list (matched by scientific or common name);
-  - copy another region's checklist;
-  - export as CSV;
-  - one-click add for species recorded in the region but missing from its checklist.
-- **Species** (add, edit, delete, bulk import), **Users** (roles, approval, block, grant or revoke packs), **Packs & pricing**, **Road-kill** (surveys, map, CSV/GeoJSON), **Map** (exact locations), **Public report**.
-- **Reviewers** (`role = 'reviewer'`) see only Overview, Submissions, Road-kill, Map, Checklists (read-only) and Report. Field accounts get a "no access" screen.
+- **Overview.** KPIs, a 12-week chart, checklist coverage per state, recent activity.
+- **Observations.** Every observation and session, filtered by status, region (incl. districts and islands), survey type, dates and text; off-checklist records flagged. The review panel shows photos, map and all fields, the observer’s original ID, and the review history, with **Verify, Needs ID, Ask for info, Change ID, Suggest ID, Duplicate, Reject, Comment, Re-open**. CSV export.
+- **Checklists.** Reviewers add species and set status; only the Admin removes. Paste a published list, copy another region, export CSV.
+- **Species.** Admin: full editing incl. taxonomy (genus, order, group, authority) and bulk import. Reviewers: *Annotate* (distribution, habitat, endemic, IUCN, sensitive, reference photos, references).
+- **Proposals / Approvals.** Reviewers propose new species, taxonomy changes, regional checklists and reference photos; the Admin approves (applied automatically) or rejects with a note.
+- **Regions** (Admin): add districts, islands, protected areas, with centre coordinates.
+- **Users** (Admin): assign or revoke Reviewer, suspend, approve reviewer applications, grant packs. The Admin role is shown as *Admin (owner)* and can’t be assigned.
+- **Settings** (Admin): paid packs on/off, default privacy, sensitive-species precision, **full export** (Excel or JSON backup), ownership info.
+- **Road-kill, Map, Feedback, Audit log, Packs & pricing, Public report.**
 
 ```bash
 cd dashboard-app
@@ -119,7 +95,7 @@ npm install
 ```bash
 npm run dev
 ```
-Open the URL Vite prints. After changing the dashboard, run `npm run build`. It writes the production build into `../dashboard/`, which is committed so GitHub Pages works in either deploy mode. The dashboard reads the shared `../config.js`, `../common.js` and `../data/seed.js`, so it uses the same data as the field app. With an empty `SUPABASE_URL` it runs in demo mode (`admin@demo / admin`, reviewer `anu@demo / anu`).
+Open the URL Vite prints. After changing the dashboard, run `npm run build`. It writes the production build into `../dashboard/`, which is committed so GitHub Pages works in either deploy mode. The dashboard reads the shared `../config.js`, `../common.js` and `../data/seed.js`, so it uses the same data as the field app.
 
 `bash scripts/build-site.sh` builds everything into `_site/`. On every push to `main`, `.github/workflows/pages.yml` publishes it to GitHub Pages (set Settings → Pages → Source to **GitHub Actions** once).
 
@@ -136,31 +112,25 @@ The architecture deliberately reuses the patterns of the two reference repositor
 | `sumit3850/EST-v2.0` (back end) | Supabase Auth + RLS as the only security boundary; **licences decided on the server** (`entitlements`, like EST's `licenses`); the Razorpay webhook with HMAC check and idempotency (`supabase/functions/razorpay-webhook`); offline-first PWA with an outbox; GPS `watchPosition` with jitter filtering; satellite and OSM map layers; CSV and GeoJSON exports; Capacitor Android shell. |
 
 ```
-config.js        deployment settings (the only file you edit). Empty SUPABASE_URL = demo mode
-common.js        HW.api: one data API with two back-ends (Supabase | localStorage demo)
+config.js        deployment settings (the only file you edit)
+common.js        HW.api: the shared data layer (Supabase) for app, website and dashboard
 data/seed.js     species catalogue, regions, packs, default prices (single source of truth)
 style.css        shared design tokens, with light and dark modes
-app.html         field app        index.html  website + report     admin.html → dashboard/
+app.html/app.js  field app        index.html  website + report     admin.html → dashboard/
 dashboard-app/   React + TS + Tailwind + shadcn admin dashboard source (Vite)
 dashboard/       its committed production build (served at /dashboard/)
 sw.js            offline cache (app shell + map tiles)
 supabase/schema.sql                       tables, RLS, views, RPCs, storage buckets
 supabase/seed.sql                         generated: node scripts/build-seed.mjs
+supabase/tests/selftest.sql               82 checks with simulated users (rolled back)
+tests/local-supabase/                     a small local stand-in for Supabase used for end-to-end tests
 supabase/functions/create-order           prices the cart server-side, creates the Razorpay order
 supabase/functions/razorpay-webhook       verifies the payment, writes entitlements
 ```
 
-## Try it now (demo mode)
+## Run the tests locally
 
-```bash
-cd herpwatch
-```
-
-```bash
-python3 -m http.server 8080
-```
-
-Open `http://localhost:8080/app.html` and sign in as **field@demo / field**, or as **admin@demo / admin** for `admin.html`. In demo mode, data lives in `localStorage`, "purchases" are free and instant, and sample records fill the report.
+The end-to-end tests use a local Postgres and `tests/local-supabase/server.mjs`, a small stand-in for Supabase Auth, the REST API and Storage. They are not needed to run the app.
 
 ## Go live (Supabase project `xjsigggtlxsscivwgzzl`)
 
@@ -173,7 +143,7 @@ Open `http://localhost:8080/app.html` and sign in as **field@demo / field**, or 
   3. Actions → **Supabase setup (database + backend)** → Run workflow.
 - **Option B, SQL Editor:** open `supabase/setup.sql` (schema + catalogue in one file), paste it into Supabase → SQL Editor, and Run.
 
-**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs about 50 checks covering accounts, visitors, field users, blocked users, admins, reviewers, purchases, map privacy and live updates, with simulated users. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
+**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs 82 checks with simulated users: accounts, the sole-Admin rule, sessions, track points, photos, privacy, the review workflow (original ID kept, history, verified records protected), reviewer proposals, purchases and live updates. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
 
 **2. Auth settings.** In Supabase → Authentication:
 - **URL Configuration → Site URL:** `https://sumit3850.github.io/Herp/app.html`.
@@ -181,17 +151,12 @@ Open `http://localhost:8080/app.html` and sign in as **field@demo / field**, or 
 - **Providers → Email:** decide whether new users must confirm their e-mail (on by default).
 - **Providers → Google:** optional, for "Continue with Google".
 
-**3. Make yourself admin.**
-1. Sign up in the app.
-2. Run the workflow again with **admin_email** set to your address. (Or, in the SQL Editor: `update public.profiles set role='admin' where email='you@…';`)
-3. The dashboard opens at `/Herp/dashboard/`.
+**3. The Admin (platform owner).** If you already were admin, running the new `setup.sql` makes you the owner automatically. On a new project: sign up in the app, then in the SQL Editor run `select public.set_platform_owner('you@example.com');` (or run the workflow with **admin_email**). The dashboard is at `/Herp/dashboard/`.
 
 **4. Payments (optional).**
 1. Add the secrets `SUPABASE_ACCESS_TOKEN` (supabase.com → Account → Access Tokens), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET`.
 2. Re-run the workflow. It deploys `create-order` and `razorpay-webhook` and sets the function secrets.
 3. In Razorpay → Settings → Webhooks, add `https://xjsigggtlxsscivwgzzl.functions.supabase.co/razorpay-webhook` for the events `payment.captured` and `refund.processed`.
-
-**5. Demo mode.** To go back to demo mode (browser-only data), set `SUPABASE_URL` to `''` in `config.js`.
 
 ## Before publishing: verify the data
 

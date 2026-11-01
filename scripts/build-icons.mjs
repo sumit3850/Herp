@@ -5,7 +5,9 @@ const dir = process.argv[2];
 const NAMES = ['book-open', 'scan-search', 'clipboard-list', 'route', 'user', 'triangle-alert', 'skull', 'circle-check', 'lock', 'lock-open', 'search', 'map', 'map-pin',
   'camera', 'download', 'smartphone', 'share', 'square-plus', 'x', 'check', 'eye', 'eye-off', 'chevron-right', 'leaf', 'shield-check', 'binoculars', 'layers',
   'cloud-off', 'refresh-cw', 'log-out', 'settings', 'chart-column', 'list-checks', 'sun', 'moon', 'sunset', 'info', 'printer', 'plus', 'trash-2', 'play', 'square',
-  'file-down', 'badge-check', 'shopping-bag', 'mail', 'layout-dashboard', 'locate-fixed', 'timer', 'footprints', 'car', 'flag', 'arrow-right', 'monitor-smartphone'];
+  'file-down', 'badge-check', 'shopping-bag', 'mail', 'layout-dashboard', 'locate-fixed', 'timer', 'footprints', 'car', 'flag', 'arrow-right', 'monitor-smartphone',
+  'house', 'pause', 'compass', 'mountain', 'image', 'history', 'message-square', 'trees', 'waves', 'droplets', 'sunrise', 'thermometer', 'cloud-sun', 'filter',
+  'calendar', 'sliders-horizontal', 'circle-help', 'circle-x', 'clock', 'ruler', 'file-spreadsheet', 'file-text', 'shield', 'list', 'pencil', 'cloud-upload', 'rotate-ccw', 'crosshair', 'users'];
 const out = {};
 for (const n of NAMES) {
   const svg = readFileSync(`${dir}/${n}.svg`, 'utf8');

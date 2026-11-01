@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BarChart3, Download, ExternalLink, Gift, Pencil, Plus, Route, Trash2, X } from "lucide-react";
+import { BarChart3, Crown, Download, ExternalLink, Gift, Pencil, Plus, Route, Trash2, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -116,7 +116,7 @@ export function UsersPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Users" description={`${users?.length ?? "…"} accounts${pending ? ` · ${pending} awaiting approval` : ""}. Set roles, approve or block accounts, and grant packs (for invoices, researchers, forest staff…).`}
+      <PageHeader title="Users" description={`${users?.length ?? "…"} accounts${pending ? ` · ${pending} awaiting approval` : ""}. Assign or revoke the Reviewer role, suspend accounts and grant packs. The Admin role belongs only to the platform owner and can’t be given to anyone.`}
         actions={<Button variant="outline" onClick={() => hw.util.download("users.csv", hw.util.toCSV(list.map(({ packs, ...u }) => ({ ...u, packs: packs.map((e) => `${e.pack}@${e.region}`).join(" ") }))))}><Download /> CSV</Button>} />
       {open.length > 0 && (
         <Card className="border-primary/40">
@@ -143,8 +143,9 @@ export function UsersPage() {
                 <TableCell><span className="font-medium">{u.full_name || u.username}</span><span className="block text-xs text-muted-foreground">@{u.username} · {u.email}</span></TableCell>
                 <TableCell className="whitespace-nowrap text-sm">{regionName(u.home_region)}</TableCell>
                 <TableCell className="text-right font-mono">{trips.filter((t) => t.user_id === u.id).length}</TableCell>
-                <TableCell><NativeSelect value={u.role} className="w-32" aria-label="Role" onChange={(e) => act(async () => { await hw.api.admin.setUser(u.id, { role: e.target.value as Profile["role"] }); await load(); }, "Role updated")}>{["user", "reviewer", "admin"].map((r) => <option key={r}>{r}</option>)}</NativeSelect></TableCell>
-                <TableCell><NativeSelect value={u.status} className="w-32" aria-label="Status" onChange={(e) => act(async () => { await hw.api.admin.setUser(u.id, { status: e.target.value as Profile["status"] }); await load(); }, "Status updated")}>{["approved", "pending", "blocked"].map((r) => <option key={r}>{r}</option>)}</NativeSelect></TableCell>
+                <TableCell>{u.is_owner || u.role === "admin" ? <Badge className="gap-1"><Crown className="size-3" /> Admin (owner)</Badge>
+                  : <NativeSelect value={u.role} className="w-32" aria-label="Role" onChange={(e) => act(async () => { await hw.api.admin.setUser(u.id, { role: e.target.value as Profile["role"] }); await load(); }, "Role updated")}>{[["user", "Observer"], ["reviewer", "Reviewer"]].map(([r, l]) => <option key={r} value={r}>{l}</option>)}</NativeSelect>}</TableCell>
+                <TableCell>{u.is_owner || u.role === "admin" ? <span className="text-xs text-muted-foreground">always active</span> : <NativeSelect value={u.status} className="w-32" aria-label="Status" onChange={(e) => act(async () => { await hw.api.admin.setUser(u.id, { status: e.target.value as Profile["status"] }); await load(); }, "Status updated")}>{[["approved", "Active"], ["pending", "Pending"], ["blocked", "Suspended"]].map(([r, l]) => <option key={r} value={r}>{l}</option>)}</NativeSelect>}</TableCell>
                 <TableCell>
                   <div className="flex max-w-xs flex-wrap gap-1">
                     {u.packs.map((e) => (
@@ -272,7 +273,7 @@ export function MapPage() {
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center gap-3 p-4">
           <NativeSelect value={pack} onChange={(e) => setPack(e.target.value)} className="w-52" aria-label="Group"><option value="">All groups</option>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect>
-          <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="w-44" aria-label="Review status"><option value="">Any review status</option><option value="pending">Pending</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option></NativeSelect>
+          <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="w-44" aria-label="Review status"><option value="">Any review status</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option></NativeSelect>
           {(["sightings", "roadkill", "tracks"] as const).map((k) => (
             <label key={k} className="flex items-center gap-2 text-sm capitalize"><input type="checkbox" className="custom-checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {k === "roadkill" ? "Road-kill" : k}</label>
           ))}

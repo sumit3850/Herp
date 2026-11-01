@@ -554,6 +554,491 @@ create index if not exists rk_surveys_user_idx         on public.roadkill_survey
 create index if not exists entitlements_lookup_idx     on public.entitlements(user_id, pack_id, region_code);
 create index if not exists checklist_region_idx        on public.checklist(region_code);
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- v4 · scientific herping platform (idempotent upgrade)
+--   regions hierarchy · taxonomy · herping sessions + GPS track points ·
+--   rich observations · photos · review history (original ID never lost) ·
+--   reviewer submissions · platform settings · privacy
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- regions: country → state/UT → district → island / region / protected area
+alter table public.regions add column if not exists kind text not null default 'state';
+alter table public.regions add column if not exists lat double precision;
+alter table public.regions add column if not exists lng double precision;
+alter table public.regions add column if not exists sort int not null default 0;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'regions_kind_ok') then
+    alter table public.regions add constraint regions_kind_ok check (kind in ('country','state','ut','district','island','region','protected_area'));
+  end if;
+end $$;
+
+-- taxonomy ------------------------------------------------------------------------
+alter table public.species add column if not exists order_name  text not null default '';
+alter table public.species add column if not exists genus       text not null default '';
+alter table public.species add column if not exists taxon_group text not null default '';  -- snake, lizard, gecko, skink, agama, monitor, chameleon, turtle, tortoise, crocodilian, frog, toad, caecilian
+alter table public.species add column if not exists authority   text not null default '';
+alter table public.species add column if not exists refs        text not null default '';  -- taxonomic references / sources
+create index if not exists species_family_idx on public.species(family);
+create index if not exists species_group_idx  on public.species(taxon_group);
+
+-- platform settings (admin) ----------------------------------------------------------
+create table if not exists public.platform_settings (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.platform_settings enable row level security;
+drop policy if exists "settings: read" on public.platform_settings;
+create policy "settings: read" on public.platform_settings for select using (true);
+insert into public.platform_settings (key, value) values
+  ('require_packs', 'true'),            -- false = every signed-in user sees full species pages
+  ('default_privacy', '"public"'),      -- public | restricted | private
+  ('sensitive_blur_decimals', '1')      -- 1 ≈ 10 km for sensitive species on public maps
+on conflict (key) do nothing;
+create or replace function public.setting(p_key text) returns jsonb
+language sql security definer stable set search_path = public as $$
+  select value from public.platform_settings where key = p_key;
+$$;
+
+-- paid packs can be switched off by the admin
+create or replace function public.can_view_species(p_species text) returns boolean
+language sql security definer stable set search_path = public as $$
+  select public.is_admin() or public.is_reviewer()
+    or (auth.uid() is not null and coalesce(public.setting('require_packs'), 'true'::jsonb) = 'false'::jsonb)
+    or exists (
+      select 1 from public.species s
+      join public.entitlements e on e.pack_id = s.pack_id
+      join public.checklist c    on c.species_id = s.id and c.region_code = e.region_code
+      where s.id = p_species and e.user_id = auth.uid()
+        and e.valid_from <= now() and (e.valid_until is null or e.valid_until > now()));
+$$;
+
+-- herping sessions (the trips table) -------------------------------------------------
+alter table public.trips add column if not exists survey_type   text not null default 'opportunistic';
+alter table public.trips add column if not exists title         text not null default '';
+alter table public.trips add column if not exists status        text not null default 'completed';
+alter table public.trips add column if not exists paused_min    numeric(8,1) not null default 0;
+alter table public.trips add column if not exists start_accuracy_m real;
+alter table public.trips add column if not exists start_elevation_m real;
+alter table public.trips add column if not exists end_lat       double precision;
+alter table public.trips add column if not exists end_lng       double precision;
+alter table public.trips add column if not exists location_name text not null default '';
+alter table public.trips add column if not exists state_code    text references public.regions(code);
+alter table public.trips add column if not exists district_code text references public.regions(code);
+alter table public.trips add column if not exists island_code   text references public.regions(code);
+alter table public.trips add column if not exists weather       text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'trips_survey_type_ok') then
+    alter table public.trips add constraint trips_survey_type_ok check (survey_type in
+      ('day','night','road','transect','habitat','opportunistic','creek_mangrove','stream_wetland'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'trips_status_ok') then
+    alter table public.trips add constraint trips_status_ok check (status in ('active','paused','completed'));
+  end if;
+end $$;
+update public.trips set survey_type = case protocol when 'night_walk' then 'night' when 'traveling' then 'transect' when 'area' then 'habitat' else survey_type end
+ where survey_type = 'opportunistic' and protocol in ('night_walk','traveling','area');
+
+-- GPS track points of a session (one row per fix) --------------------------------------
+create table if not exists public.track_points (
+  session_id uuid not null references public.trips(id) on delete cascade,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  t          timestamptz not null,
+  lat        double precision not null check (lat between -90 and 90),
+  lng        double precision not null check (lng between -180 and 180),
+  accuracy_m real,
+  elevation_m real,
+  primary key (session_id, t)
+);
+alter table public.track_points enable row level security;
+drop policy if exists "own rows" on public.track_points;
+create policy "own rows" on public.track_points for all using (user_id = auth.uid()) with check (user_id = auth.uid() and public.is_active());
+drop policy if exists "staff rows" on public.track_points;
+create policy "staff rows" on public.track_points for select using (public.is_reviewer());
+
+-- observations (the sightings table) ---------------------------------------------------
+alter table public.sightings add column if not exists original_species_id   text;
+alter table public.sightings add column if not exists original_species_text text;
+alter table public.sightings add column if not exists id_confidence text not null default 'certain';
+alter table public.sightings add column if not exists evidence      text not null default 'direct';
+alter table public.sightings add column if not exists mortality     text not null default '';    -- '' | roadkill | predation | other
+alter table public.sightings add column if not exists origin        text not null default 'wild';
+alter table public.sightings add column if not exists habitat       text not null default '';
+alter table public.sightings add column if not exists microhabitat  text not null default '';
+alter table public.sightings add column if not exists behaviour     text not null default '';
+alter table public.sightings add column if not exists activity      text not null default '';
+alter table public.sightings add column if not exists weather       text not null default '';
+alter table public.sightings add column if not exists temperature_c numeric(4,1);
+alter table public.sightings add column if not exists elevation_m   real;
+alter table public.sightings add column if not exists location_name text not null default '';
+alter table public.sightings add column if not exists state_code    text references public.regions(code);
+alter table public.sightings add column if not exists district_code text references public.regions(code);
+alter table public.sightings add column if not exists island_code   text references public.regions(code);
+alter table public.sightings add column if not exists privacy       text not null default 'public';
+alter table public.sightings add column if not exists duplicate_of  uuid references public.sightings(id) on delete set null;
+update public.sightings set original_species_id = species_id, original_species_text = species_text where original_species_id is null and original_species_text is null;
+do $$
+declare c record;
+begin
+  for c in select * from (values
+    ('sightings_confidence_ok', 'id_confidence in (''certain'',''probable'',''possible'')'),
+    ('sightings_evidence_ok',   'evidence in (''direct'',''shed_skin'',''eggs'',''tracks'',''call'',''remains'',''photo_only'')'),
+    ('sightings_origin_ok',     'origin in (''wild'',''captive'',''released'',''unknown'')'),
+    ('sightings_privacy_ok',    'privacy in (''public'',''restricted'',''private'')'),
+    ('sightings_temp_ok',       'temperature_c is null or temperature_c between -20 and 60')
+  ) v(name, expr) loop
+    if not exists (select 1 from pg_constraint where conname = c.name) then
+      execute format('alter table public.sightings add constraint %I check (%s)', c.name, c.expr);
+    end if;
+  end loop;
+  -- verification statuses: pending · verified · needs_id · more_info · rejected
+  if exists (select 1 from pg_constraint where conname = 'sightings_review_status_check') then
+    alter table public.sightings drop constraint sightings_review_status_check;
+  end if;
+  update public.sightings set review_status = 'verified' where review_status = 'accepted';
+  if not exists (select 1 from pg_constraint where conname = 'sightings_review_status_ok') then
+    alter table public.sightings add constraint sightings_review_status_ok check (review_status in ('pending','verified','needs_id','more_info','rejected'));
+  end if;
+end $$;
+create index if not exists sightings_user_time_idx on public.sightings(user_id, observed_at desc);
+create index if not exists sightings_state_idx  on public.sightings(state_code);
+create index if not exists sightings_island_idx on public.sightings(island_code);
+
+-- original identification is immutable; observer edits only re-open review when something real changed
+create or replace function public.guard_review() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.original_species_id := new.species_id;
+    new.original_species_text := coalesce(new.species_text, '');
+    if auth.uid() is not null then new.review_status := 'pending'; new.reviewed_by := null; new.reviewed_at := null; end if;   -- every new record starts in review
+    return new;
+  end if;
+  new.original_species_id := old.original_species_id;
+  new.original_species_text := old.original_species_text;
+  if not public.is_reviewer() then
+    new.reviewed_by := old.reviewed_by; new.reviewed_at := old.reviewed_at; new.review_note := old.review_note; new.duplicate_of := old.duplicate_of;
+    if (new.species_id, new.species_text, new.count, new.lat, new.lng, new.observed_at, new.evidence, new.life_stage, new.id_confidence)
+       is distinct from (old.species_id, old.species_text, old.count, old.lat, old.lng, old.observed_at, old.evidence, old.life_stage, old.id_confidence) then
+      new.review_status := 'pending';
+    else
+      new.review_status := old.review_status;     -- re-syncing an unchanged record never undoes a verification
+    end if;
+  elsif new.review_status is distinct from old.review_status then
+    new.reviewed_by := case when new.review_status = 'pending' then null else auth.uid() end;
+    new.reviewed_at := case when new.review_status = 'pending' then null else now() end;
+  end if;
+  return new;
+end $$;
+
+-- verified records are kept (data retention); observers may delete anything else
+create or replace function public.guard_sighting_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.review_status = 'verified' and not public.is_reviewer() then
+    raise exception 'Verified observations are kept for scientific integrity. Ask a reviewer if it must be removed.' using errcode = '42501';
+  end if;
+  return old;
+end $$;
+drop trigger if exists guard_sighting_delete on public.sightings;
+create trigger guard_sighting_delete before delete on public.sightings for each row execute function public.guard_sighting_delete();
+
+-- photographs ---------------------------------------------------------------------------
+create table if not exists public.photos (
+  id           uuid primary key,                         -- generated on the device (offline-safe)
+  sighting_id  uuid not null references public.sightings(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  url          text not null,
+  storage_path text not null default '',
+  feature      text not null default '',                 -- dorsal, ventral, head, lateral, habitat, other
+  taken_at     timestamptz,
+  width        int, height int,
+  size_bytes   int,
+  lat double precision, lng double precision,
+  is_reference boolean not null default false,
+  created_at   timestamptz not null default now()
+);
+create index if not exists photos_sighting_idx on public.photos(sighting_id);
+alter table public.photos enable row level security;
+drop policy if exists "own rows" on public.photos;
+create policy "own rows" on public.photos for all using (user_id = auth.uid()) with check (user_id = auth.uid() and public.is_active());
+drop policy if exists "staff rows" on public.photos;
+create policy "staff rows" on public.photos for all using (public.is_reviewer()) with check (public.is_reviewer());
+
+-- review history: append-only, every verification step and identification change ----------
+create table if not exists public.observation_reviews (
+  id              bigserial primary key,
+  sighting_id     uuid not null references public.sightings(id) on delete cascade,
+  reviewer_id     uuid references auth.users(id) on delete set null,
+  reviewer_name   text not null default '',
+  action          text not null check (action in ('verify','reject','needs_id','more_info','suggest_id','reidentify','duplicate','comment','reopen')),
+  from_species_id text,
+  to_species_id   text,
+  status_after    text,
+  comment         text not null default '' check (length(comment) <= 2000),
+  created_at      timestamptz not null default now()
+);
+create index if not exists obs_reviews_sighting_idx on public.observation_reviews(sighting_id, created_at);
+alter table public.observation_reviews enable row level security;
+drop policy if exists "reviews: read" on public.observation_reviews;
+create policy "reviews: read" on public.observation_reviews for select
+  using (public.is_reviewer() or exists (select 1 from public.sightings s where s.id = sighting_id and s.user_id = auth.uid()));
+-- no insert/update/delete policies: rows are written only by review_observation()
+
+create or replace function public.review_observation(p_sighting uuid, p_action text, p_species text default null, p_comment text default '', p_duplicate_of uuid default null)
+returns public.sightings language plpgsql security definer set search_path = public as $$
+declare s public.sightings; new_status text; nm text;
+begin
+  select * into s from public.sightings where id = p_sighting;
+  if s.id is null then raise exception 'observation not found'; end if;
+  if p_action = 'comment' then
+    if not (public.is_reviewer() or s.user_id = auth.uid()) then raise exception 'not allowed'; end if;
+  elsif not public.is_reviewer() then
+    raise exception 'reviewers only' using errcode = '42501';
+  end if;
+  if p_action in ('suggest_id','reidentify') and (p_species is null or not exists (select 1 from public.species where id = p_species)) then
+    raise exception 'choose a species from the catalogue';
+  end if;
+  if p_action in ('reject','more_info','needs_id','suggest_id','duplicate') and coalesce(trim(p_comment), '') = '' and p_action <> 'duplicate' then
+    raise exception 'please add a comment for the observer';
+  end if;
+  new_status := case p_action
+    when 'verify' then 'verified' when 'reidentify' then 'verified' when 'reject' then 'rejected'
+    when 'duplicate' then 'rejected' when 'needs_id' then 'needs_id' when 'suggest_id' then 'needs_id'
+    when 'more_info' then 'more_info' when 'reopen' then 'pending' else s.review_status end;
+  select username into nm from public.profiles where id = auth.uid();
+  insert into public.observation_reviews (sighting_id, reviewer_id, reviewer_name, action, from_species_id, to_species_id, status_after, comment)
+  values (s.id, auth.uid(), coalesce(nm, ''), p_action, s.species_id, case when p_action in ('suggest_id','reidentify') then p_species end, new_status, coalesce(p_comment, ''));
+  if p_action <> 'comment' then
+    update public.sightings set
+      review_status = new_status,
+      species_id = case when p_action = 'reidentify' then p_species else species_id end,
+      review_note = case when coalesce(p_comment, '') <> '' then p_comment else review_note end,
+      duplicate_of = case when p_action = 'duplicate' then p_duplicate_of else duplicate_of end
+    where id = s.id returning * into s;
+  end if;
+  return s;
+end $$;
+revoke all on function public.review_observation(uuid, text, text, text, uuid) from public, anon;
+grant execute on function public.review_observation(uuid, text, text, text, uuid) to authenticated;
+
+-- reviewer submissions (proposals the Admin approves) ------------------------------------
+create table if not exists public.reviewer_submissions (
+  id            uuid primary key default gen_random_uuid(),
+  submitted_by  uuid not null references auth.users(id) on delete cascade,
+  kind          text not null check (kind in ('new_species','species_update','regional_checklist','checklist_change','reference_photo')),
+  region_code   text references public.regions(code) on delete set null,
+  species_id    text references public.species(id) on delete set null,
+  payload       jsonb not null default '{}',
+  note          text not null default '' check (length(note) <= 2000),
+  refs          text not null default '' check (length(refs) <= 2000),
+  status        text not null default 'pending' check (status in ('pending','approved','rejected')),
+  decided_by    uuid references auth.users(id) on delete set null,
+  decided_at    timestamptz,
+  decision_note text not null default '',
+  created_at    timestamptz not null default now()
+);
+alter table public.reviewer_submissions enable row level security;
+drop policy if exists "subs: reviewer" on public.reviewer_submissions;
+create policy "subs: reviewer" on public.reviewer_submissions for select using (submitted_by = auth.uid() or public.is_admin());
+drop policy if exists "subs: submit" on public.reviewer_submissions;
+create policy "subs: submit" on public.reviewer_submissions for insert with check (submitted_by = auth.uid() and public.is_reviewer() and status = 'pending');
+drop policy if exists "subs: admin" on public.reviewer_submissions;
+create policy "subs: admin" on public.reviewer_submissions for update using (public.is_admin()) with check (public.is_admin());
+
+-- Admin approves (and applies) or rejects a submission
+create or replace function public.decide_submission(p_id uuid, p_approve boolean, p_note text default '')
+returns public.reviewer_submissions language plpgsql security definer set search_path = public as $$
+declare r public.reviewer_submissions; sp jsonb; e jsonb;
+  allowed text[] := array['common_name','scientific_name','family','genus','order_name','taxon_group','authority','refs','iucn','endemic','sensitive','venom','toxic','habitat','distribution','id_notes','behaviour','similar_species','size','images','pack_id'];
+  k text; sets text := '';
+begin
+  if not public.is_admin() then raise exception 'admin only' using errcode = '42501'; end if;
+  select * into r from public.reviewer_submissions where id = p_id and status = 'pending' for update;
+  if r.id is null then raise exception 'submission not found or already decided'; end if;
+  if p_approve then
+    if r.kind = 'new_species' then
+      sp := r.payload;
+      insert into public.species (id, pack_id, common_name, scientific_name, family, genus, order_name, taxon_group, authority, refs, iucn, endemic, sensitive, venom, toxic, habitat, distribution, id_notes)
+      values (coalesce(sp->>'id', lower(regexp_replace(sp->>'scientific_name', '[^A-Za-z]+', '-', 'g'))),
+              coalesce(sp->>'pack_id', case when sp->>'taxon_group' = 'snake' then 'snakes'
+                                            when sp->>'taxon_group' in ('frog','toad','caecilian') then 'frogs'
+                                            when sp->>'taxon_group' in ('turtle','tortoise','crocodilian') then 'turtles' else 'lizards' end),
+              sp->>'common_name', sp->>'scientific_name',
+              coalesce(sp->>'family',''), coalesce(sp->>'genus', split_part(sp->>'scientific_name',' ',1)), coalesce(sp->>'order_name',''), coalesce(sp->>'taxon_group',''),
+              coalesce(sp->>'authority',''), coalesce(sp->>'refs', r.refs), coalesce(sp->>'iucn','NE'), coalesce((sp->>'endemic')::boolean,false), coalesce((sp->>'sensitive')::boolean,false),
+              coalesce(sp->>'venom','non'), coalesce(sp->>'toxic','non'), coalesce(sp->>'habitat',''), coalesce(sp->>'distribution',''), coalesce(sp->>'id_notes',''));
+      if r.region_code is not null then
+        insert into public.checklist (region_code, species_id, status) values (r.region_code, coalesce(sp->>'id', lower(regexp_replace(sp->>'scientific_name', '[^A-Za-z]+', '-', 'g'))), coalesce(sp->>'checklist_status','native')) on conflict do nothing;
+      end if;
+    elsif r.kind in ('species_update', 'reference_photo') then
+      for k in select jsonb_object_keys(r.payload->'changes') loop
+        if k = any(allowed) then
+          sets := sets || format('%I = %s, ', k, case when k = 'images' then format('coalesce(images, ''[]''::jsonb) || %L::jsonb', r.payload->'changes'->k)
+                                                     when k in ('endemic','sensitive') then format('%L::boolean', r.payload->'changes'->>k)
+                                                     else format('%L', r.payload->'changes'->>k) end);
+        end if;
+      end loop;
+      if sets <> '' then execute format('update public.species set %s updated_at = now() where id = %L', sets, r.species_id); end if;
+    elsif r.kind in ('regional_checklist', 'checklist_change') then
+      for e in select * from jsonb_array_elements(coalesce(r.payload->'add', '[]')) loop
+        insert into public.checklist (region_code, species_id, status) values (r.region_code, e->>'species_id', coalesce(e->>'status','native'))
+        on conflict (region_code, species_id) do update set status = excluded.status;
+      end loop;
+      delete from public.checklist where region_code = r.region_code and species_id in (select jsonb_array_elements_text(coalesce(r.payload->'remove', '[]')));
+    end if;
+  end if;
+  update public.reviewer_submissions set status = case when p_approve then 'approved' else 'rejected' end,
+         decided_by = auth.uid(), decided_at = now(), decision_note = coalesce(p_note, '') where id = r.id returning * into r;
+  return r;
+end $$;
+revoke all on function public.decide_submission(uuid, boolean, text) from public, anon;
+grant execute on function public.decide_submission(uuid, boolean, text) to authenticated;
+
+-- reviewers: add species to regional checklists directly; read & annotate species
+drop policy if exists "checklist: reviewer add" on public.checklist;
+create policy "checklist: reviewer add" on public.checklist for insert with check (public.is_reviewer());
+drop policy if exists "checklist: reviewer edit" on public.checklist;
+create policy "checklist: reviewer edit" on public.checklist for update using (public.is_reviewer()) with check (public.is_reviewer());
+drop policy if exists "species: staff read" on public.species;
+create policy "species: staff read" on public.species for select using (public.is_reviewer());
+drop policy if exists "species: reviewer annotate" on public.species;
+create policy "species: reviewer annotate" on public.species for update using (public.is_reviewer()) with check (public.is_reviewer());
+-- … but taxonomy itself is Admin-only (reviewers send a submission)
+create or replace function public.guard_species_update() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() and auth.uid() is not null and
+     (new.id, new.pack_id, new.common_name, new.scientific_name, new.family, new.genus, new.order_name, new.taxon_group, new.authority, new.published)
+     is distinct from (old.id, old.pack_id, old.common_name, old.scientific_name, old.family, old.genus, old.order_name, old.taxon_group, old.authority, old.published) then
+    raise exception 'Names and taxonomy are changed by the Admin: send a taxonomy correction instead.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_species_update on public.species;
+create trigger guard_species_update before update on public.species for each row execute function public.guard_species_update();
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgname = 'audit_change' and tgrelid = 'public.observation_reviews'::regclass) then null; end if;
+end $$;
+do $$
+declare t text;
+begin
+  foreach t in array array['reviewer_submissions','platform_settings','regions'] loop
+    execute format('drop trigger if exists audit_change on public.%I', t);
+    execute format('create trigger audit_change after insert or update or delete on public.%I for each row execute function public.audit_change()', t);
+  end loop;
+end $$;
+
+
+-- species index (free) now carries taxonomy for filtering
+drop view if exists public.species_index;
+create view public.species_index as
+  select s.id, s.pack_id, s.common_name, s.scientific_name, s.family, s.genus, s.order_name, s.taxon_group, s.authority,
+         s.venom, s.toxic, s.iucn, s.endemic, s.sensitive,
+         coalesce((select array_agg(c.region_code) from public.checklist c where c.species_id = s.id), '{}') as regions
+  from public.species s where s.published;
+grant select on public.species_index to anon, authenticated;
+drop view if exists public.species_full;
+create view public.species_full with (security_invoker = true) as
+  select s.*, coalesce((select array_agg(c.region_code) from public.checklist c where c.species_id = s.id), '{}') as regions
+  from public.species s;
+grant select on public.species_full to authenticated;
+
+-- website statistics and map points respect observation privacy
+create or replace function public.public_stats() returns jsonb
+language sql security definer stable set search_path = public as $$
+with s as (select x.*, sp.pack_id, sp.iucn, sp.venom from public.sightings x left join public.species sp on sp.id = x.species_id where x.review_status <> 'rejected' and x.privacy <> 'private'),
+     r as (select x.user_id, x.species_id, x.count, x.observed_at, coalesce(sp.pack_id, x.pack) pk from public.roadkill_records x left join public.species sp on sp.id = x.species_id
+           union all
+           select x.user_id, x.species_id, x.count, x.observed_at, sp.pack_id from public.sightings x left join public.species sp on sp.id = x.species_id
+           where x.mortality = 'roadkill' and x.review_status <> 'rejected' and x.privacy <> 'private'),
+     km as (select coalesce(sum(d),0) v, count(*) n from (select distance_km d from public.roadkill_surveys union all select distance_km from public.trips where survey_type = 'road' and status = 'completed') z)
+select jsonb_build_object(
+  'totals', jsonb_build_object(
+     'sightings', (select coalesce(sum(count),0) from s),
+     'records', (select count(*) from s),
+     'species', (select count(distinct species_id) from s),
+     'observers', (select count(distinct user_id) from (select user_id from s union select user_id from r) u),
+     'roadkill', (select coalesce(sum(count),0) from r),
+     'roadkill_surveys', (select n from km),
+     'roadkill_km', (select round(v,1) from km),
+     'roadkill_per_100km', (select case when v > 0 then round((select coalesce(sum(count),0) from r) / v * 100, 1) else 0 end from km)),
+  'by_pack',  coalesce((select jsonb_agg(jsonb_build_object('pack', pack_id, 'n', n) order by n desc) from (select pack_id, sum(count) n from s group by 1) q), '[]'),
+  'roadkill_by_pack', coalesce((select jsonb_agg(jsonb_build_object('pack', pk, 'n', n) order by n desc) from (select pk, sum(count) n from r group by 1) q), '[]'),
+  'by_iucn',  coalesce((select jsonb_agg(jsonb_build_object('iucn', iucn, 'n', n) order by n desc) from (select iucn, sum(count) n from s where iucn is not null group by 1) q), '[]'),
+  'by_venom', coalesce((select jsonb_agg(jsonb_build_object('venom', venom, 'n', n) order by n desc) from (select venom, sum(count) n from s where pack_id = 'snakes' group by 1) q), '[]'),
+  'by_region',coalesce((select jsonb_agg(jsonb_build_object('region', region_code, 'n', n) order by n desc) from (select region_code, sum(count) n from s where region_code is not null group by 1) q), '[]'),
+  'by_month', coalesce((select jsonb_agg(jsonb_build_object('month', m, 'sightings', a, 'roadkill', b) order by m) from (
+       select m, sum(a) a, sum(b) b from (
+         select to_char(observed_at,'YYYY-MM') m, count a, 0 b from s
+         union all select to_char(observed_at,'YYYY-MM'), 0, count from r) z group by m) q), '[]'),
+  'top_species', coalesce((select jsonb_agg(jsonb_build_object('species_id', q.species_id, 'n', q.n, 'common', sp.common_name, 'sci', sp.scientific_name) order by q.n desc)
+       from (select species_id, sum(count) n from s where species_id is not null group by 1 order by 2 desc limit 12) q join public.species sp on sp.id = q.species_id), '[]'),
+  'roadkill_species', coalesce((select jsonb_agg(jsonb_build_object('species_id', q.species_id, 'n', q.n, 'common', sp.common_name, 'sci', sp.scientific_name) order by q.n desc)
+       from (select species_id, sum(count) n from r where species_id is not null group by 1 order by 2 desc limit 12) q join public.species sp on sp.id = q.species_id), '[]')
+);
+$$;
+
+create or replace function public.public_points() returns table(kind text, species_id text, pack text, iucn text, lat double precision, lng double precision, month text)
+language sql security definer stable set search_path = public as $$
+  select 'sighting', x.species_id, sp.pack_id, sp.iucn,
+         round(x.lat::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         round(x.lng::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         to_char(x.observed_at,'YYYY-MM')
+  from public.sightings x left join public.species sp on sp.id = x.species_id
+  where x.review_status <> 'rejected' and x.privacy = 'public' and x.lat is not null
+  union all
+  select 'roadkill', x.species_id, coalesce(sp.pack_id, x.pack), sp.iucn,
+         round(x.lat::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         round(x.lng::numeric, case when sp.sensitive then 1 else 2 end)::float8,
+         to_char(x.observed_at,'YYYY-MM')
+  from public.roadkill_records x left join public.species sp on sp.id = x.species_id
+  where x.lat is not null;
+$$;
+
+-- public observations for the Explore map (privacy-aware) -------------------------------
+create or replace function public.public_observations(p_species text default null, p_family text default null, p_from date default null, p_to date default null,
+                                                      p_region text default null, p_status text default null, p_limit int default 3000)
+returns table(id uuid, species_id text, common_name text, scientific_name text, family text, taxon_group text, count int, observed_at timestamptz,
+              lat double precision, lng double precision, precise boolean, location_name text, state_code text, district_code text, island_code text,
+              habitat text, microhabitat text, notes text, review_status text, photo text, observer text, evidence text)
+language sql security definer stable set search_path = public as $$
+  select x.id, x.species_id, sp.common_name, sp.scientific_name, sp.family, sp.taxon_group, x.count, x.observed_at,
+         case when coalesce(sp.sensitive, false) then round(x.lat::numeric, coalesce((public.setting('sensitive_blur_decimals'))::int, 1))::float8 else x.lat end,
+         case when coalesce(sp.sensitive, false) then round(x.lng::numeric, coalesce((public.setting('sensitive_blur_decimals'))::int, 1))::float8 else x.lng end,
+         not coalesce(sp.sensitive, false), x.location_name, x.state_code, x.district_code, x.island_code,
+         x.habitat, x.microhabitat, case when coalesce(sp.sensitive, false) then '' else x.notes end, x.review_status,
+         coalesce((select p.url from public.photos p where p.sighting_id = x.id order by p.created_at limit 1), x.photos->>0),
+         (select pr.username from public.profiles pr where pr.id = x.user_id), x.evidence
+  from public.sightings x left join public.species sp on sp.id = x.species_id
+  where x.privacy = 'public' and x.review_status <> 'rejected' and x.lat is not null
+    and (p_species is null or x.species_id = p_species)
+    and (p_family is null or sp.family = p_family)
+    and (p_from is null or x.observed_at >= p_from) and (p_to is null or x.observed_at < p_to + 1)
+    and (p_region is null or p_region in (x.region_code, x.state_code, x.district_code, x.island_code))
+    and (p_status is null or x.review_status = p_status)
+  order by x.observed_at desc
+  limit least(coalesce(p_limit, 3000), 5000);
+$$;
+grant execute on function public.public_observations(text, text, date, date, text, text, int) to anon, authenticated;
+
+-- leaderboard: recorders ranked by distinct species (records break ties); private and rejected records never count
+create or replace function public.public_leaderboard(p_region text default null, p_from date default null, p_group text default null, p_limit int default 50)
+returns table(rank bigint, username text, full_name text, species bigint, records bigint)
+language sql security definer stable set search_path = public as $$
+  select rank() over (order by count(distinct x.species_id) desc, count(*) desc), pr.username, pr.full_name,
+         count(distinct x.species_id), count(*)
+  from public.sightings x join public.profiles pr on pr.id = x.user_id left join public.species sp on sp.id = x.species_id
+  where x.species_id is not null and x.review_status <> 'rejected' and x.privacy <> 'private' and coalesce(x.duplicate_of::text, '') = ''
+    and (p_from is null or x.observed_at >= p_from)
+    and (p_region is null or p_region in (x.region_code, x.state_code, x.district_code, x.island_code) or (p_region = 'IN' and x.region_code like 'IN%'))
+    and (p_group is null or sp.taxon_group = p_group)
+  group by pr.id, pr.username, pr.full_name
+  order by 1, pr.username
+  limit least(coalesce(p_limit, 50), 200);
+$$;
+grant execute on function public.public_leaderboard(text, date, text, int) to anon, authenticated;
+
 -- ─── feedback (public form + in-app) ───────────────────────────────────────
 -- Anyone may send feedback (signed in or not); only admins read it.
 create table if not exists public.feedback (

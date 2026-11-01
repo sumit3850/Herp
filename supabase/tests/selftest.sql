@@ -57,6 +57,9 @@ begin
     r := r || jsonb_build_object('a','1 accounts','t','profile stores the login e-mail (one account for app + dashboard)','ok', v = 'hwtest.field@example.invalid','d', coalesce(v, 'NULL'));
 
     update public.profiles set role = 'reviewer' where id = RV;
+    -- the test admin is made platform owner for the duration of the test (rolled back afterwards)
+    delete from public.platform_owner; insert into public.platform_owner (user_id) values (AD);
+    update public.profiles set role = 'reviewer' where role = 'admin' and id <> AD;
     update public.profiles set role = 'admin' where id = AD;
     update public.profiles set status = 'blocked' where id = BL;
     select count(*) into n from public.audit_log where tbl = 'profiles' and row_key in (RV::text, AD::text, BL::text);
@@ -103,7 +106,7 @@ begin
     insert into public.trips (id, user_id, region_code, protocol, started_at, ended_at, duration_min, distance_km, observers, complete, track, lat, lng)
     values (T1, F, g_region, 'traveling', now() - interval '2 hours', now() - interval '1 hour', 60, 2.4, 1, true, '[[11.6,92.7],[11.61,92.71]]', 11.6, 92.7);
     insert into public.sightings (id, trip_id, user_id, species_id, count, lat, lng, region_code, review_status)
-    values (S1, T1, F, any_sp, 2, 11.6012, 92.7034, g_region, 'accepted');
+    values (S1, T1, F, any_sp, 2, 11.6012, 92.7034, g_region, 'verified');
     select review_status into v from public.sightings where id = S1;
     r := r || jsonb_build_object('a','3 field user','t','can submit a checklist with sightings','ok', v is not null,'d', '');
     r := r || jsonb_build_object('a','3 field user','t','cannot self-accept: new sightings are always pending','ok', v = 'pending','d', 'stored as ' || coalesce(v, 'NULL'));
@@ -142,9 +145,20 @@ begin
       r := r || jsonb_build_object('a','3 field user','t','cannot edit core checklists','ok', false,'d', 'insert succeeded');
     exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot edit core checklists','ok', true,'d', sqlerrm); end;
     begin
-      perform public.claim_first_admin();
-      r := r || jsonb_build_object('a','3 field user','t','cannot claim admin once an admin exists','ok', false,'d', 'claimed');
-    exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot claim admin once an admin exists','ok', true,'d', sqlerrm); end;
+      perform public.request_access('admin', '');
+      r := r || jsonb_build_object('a','3 field user','t','cannot request the Admin role','ok', false,'d', 'request accepted');
+    exception when others then r := r || jsonb_build_object('a','3 field user','t','cannot request the Admin role','ok', true,'d', sqlerrm); end;
+    select public.is_admin() into b;
+    r := r || jsonb_build_object('a','3 field user','t','is not Admin','ok', not b,'d', '');
+    insert into public.track_points (session_id, user_id, t, lat, lng, accuracy_m) values (T1, F, now() - interval '100 minutes', 11.6, 92.7, 8), (T1, F, now() - interval '99 minutes', 11.601, 92.701, 7);
+    select count(*) into n from public.track_points where session_id = T1;
+    r := r || jsonb_build_object('a','3 field user','t','session GPS track points are stored','ok', n = 2,'d', n || ' points');
+    insert into public.photos (id, sighting_id, user_id, url, feature) values (gen_random_uuid(), S1, F, 'https://example.invalid/p.jpg', 'dorsal');
+    select count(*) into n from public.photos where sighting_id = S1;
+    r := r || jsonb_build_object('a','3 field user','t','photos attach to an observation','ok', n = 1,'d', '');
+    insert into public.sightings (id, trip_id, user_id, species_id, count, lat, lng, region_code, privacy, evidence, observed_at)
+    values ('00000000-0000-4000-8000-0000000b0009', null, F, any_sp, 1, 11.62, 92.71, g_region, 'private', 'shed_skin', now() - interval '3 hours');
+    r := r || jsonb_build_object('a','3 field user','t','can add an observation without a session (indirect evidence: shed skin)','ok', true,'d', '');
     perform public.request_access('reviewer', 'I run night walks in this state');
     select count(*) into n from public.access_requests where user_id = F and status = 'pending';
     r := r || jsonb_build_object('a','3 field user','t','can request reviewer access','ok', n = 1,'d', '');
@@ -184,11 +198,23 @@ begin
     r := r || jsonb_build_object('a','5 admin','t','can edit species','ok', n = 1,'d', '');
     select count(*) into n from public.trips where id = T1;
     r := r || jsonb_build_object('a','5 admin','t','sees every submitted checklist','ok', n = 1,'d', '');
+    begin
+      update public.profiles set role = 'admin' where id = RV;
+      r := r || jsonb_build_object('a','5 admin','t','even the Admin cannot create a second Admin','ok', false,'d', 'second admin created');
+    exception when others then r := r || jsonb_build_object('a','5 admin','t','even the Admin cannot create a second Admin','ok', true,'d', sqlerrm); end;
+    begin
+      update public.profiles set status = 'blocked' where id = AD;
+      r := r || jsonb_build_object('a','5 admin','t','the owner account cannot be suspended from the app','ok', false,'d', 'suspended');
+    exception when others then r := r || jsonb_build_object('a','5 admin','t','the owner account cannot be suspended from the app','ok', true,'d', sqlerrm); end;
     perform public.decide_access((select id from public.access_requests where user_id = F and status = 'pending'), true);
     select role into v from public.profiles where id = F;
     r := r || jsonb_build_object('a','5 admin','t','approving a request grants the role','ok', v = 'reviewer','d', 'field user is now ' || coalesce(v, '?'));
     perform set_config('hw.role_change_ok', '', true);
     update public.profiles set role = 'user' where id = F;   -- back to a plain field user for the next tests
+    insert into public.reviewer_submissions (submitted_by, kind, region_code, payload, note) values (AD, 'regional_checklist', g_region, jsonb_build_object('add', jsonb_build_array(jsonb_build_object('species_id', other_sp, 'status', 'vagrant'))), 'test');
+    perform public.decide_submission((select id from public.reviewer_submissions where kind = 'regional_checklist' and submitted_by = AD), true, 'ok');
+    select status into v from public.checklist where region_code = g_region and species_id = other_sp;
+    r := r || jsonb_build_object('a','5 admin','t','approving a regional checklist proposal applies it','ok', v = 'vagrant','d', coalesce(v, 'not applied'));
     select count(*) into n from public.feedback where page = 'selftest';
     r := r || jsonb_build_object('a','5 admin','t','can read feedback','ok', n = 1,'d', n || ' test feedback');
     select count(*) into n from public.audit_log;
@@ -211,12 +237,46 @@ begin
     set local role authenticated;
     select count(*) into n from public.sightings where id = S1;
     r := r || jsonb_build_object('a','7 reviewer','t','sees submissions from every observer','ok', n = 1,'d', '');
-    update public.sightings set review_status = 'accepted' where id = S1;
-    select reviewed_by = RV and reviewed_at is not null into b from public.sightings where id = S1;
-    r := r || jsonb_build_object('a','7 reviewer','t','accepting a record stores who reviewed it and when','ok', coalesce(b, false),'d', '');
-    update public.species set common_name = 'x' where id = any_sp;
+    perform public.review_observation(S1, 'verify', null, 'Clear photo of the dorsal pattern');
+    select reviewed_by = RV and reviewed_at is not null and review_status = 'verified' into b from public.sightings where id = S1;
+    r := r || jsonb_build_object('a','7 reviewer','t','verifying stores status, reviewer and date','ok', coalesce(b, false),'d', '');
+    perform public.review_observation(S1, 'reidentify', other_sp, 'Scale count fits the other species');
+    select species_id = other_sp and original_species_id = any_sp into b from public.sightings where id = S1;
+    r := r || jsonb_build_object('a','7 reviewer','t','re-identification keeps the observer''s original ID','ok', coalesce(b, false),'d', any_sp || ' → ' || other_sp);
+    select count(*) into n from public.observation_reviews where sighting_id = S1;
+    r := r || jsonb_build_object('a','7 reviewer','t','every review step is kept in the history','ok', n = 2,'d', n || ' history entries');
+    begin
+      perform public.review_observation(S1, 'reject', null, '');
+      r := r || jsonb_build_object('a','7 reviewer','t','rejections must explain why','ok', false,'d', 'empty reason accepted');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','rejections must explain why','ok', true,'d', sqlerrm); end;
+    select count(*) into n from public.sightings where id = '00000000-0000-4000-8000-0000000b0009';
+    r := r || jsonb_build_object('a','7 reviewer','t','reviewers can see private observations to verify them','ok', n = 1,'d', '');
+    if extra_sp is not null then
+      insert into public.checklist (region_code, species_id, status) values (g_region, extra_sp, 'native');
+      r := r || jsonb_build_object('a','7 reviewer','t','can add species to a regional checklist','ok', true,'d', extra_sp);
+      delete from public.checklist where region_code = g_region and species_id = extra_sp;
+      get diagnostics n = row_count;
+      r := r || jsonb_build_object('a','7 reviewer','t','cannot delete checklist entries (Admin only)','ok', n = 0,'d', n || ' rows deleted');
+    end if;
+    update public.species set distribution = distribution || ' (checked)' where id = any_sp;
     get diagnostics n = row_count;
-    r := r || jsonb_build_object('a','7 reviewer','t','cannot edit species (admin only)','ok', n = 0,'d', n || ' rows changed');
+    r := r || jsonb_build_object('a','7 reviewer','t','can update distribution / conservation notes','ok', n = 1,'d', '');
+    begin
+      update public.species set scientific_name = 'Wrongus wrongus' where id = any_sp;
+      r := r || jsonb_build_object('a','7 reviewer','t','cannot change names/taxonomy directly','ok', false,'d', 'renamed');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','cannot change names/taxonomy directly','ok', true,'d', sqlerrm); end;
+    insert into public.reviewer_submissions (submitted_by, kind, species_id, payload, note)
+    values (RV, 'species_update', any_sp, '{"changes":{"authority":"(Test, 2026)"}}', 'author citation');
+    r := r || jsonb_build_object('a','7 reviewer','t','can propose a taxonomy correction','ok', true,'d', '');
+    begin
+      perform public.decide_submission((select id from public.reviewer_submissions where submitted_by = RV limit 1), true, '');
+      r := r || jsonb_build_object('a','7 reviewer','t','cannot approve their own proposals','ok', false,'d', 'approved');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','cannot approve their own proposals','ok', true,'d', sqlerrm); end;
+    begin
+      update public.profiles set role = 'reviewer' where id = F;
+      get diagnostics n = row_count;
+      r := r || jsonb_build_object('a','7 reviewer','t','cannot assign roles','ok', n = 0,'d', n || ' rows changed');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','cannot assign roles','ok', true,'d', sqlerrm); end;
     begin
       update public.profiles set role = 'admin' where id = F;
       get diagnostics n = row_count;
@@ -228,9 +288,25 @@ begin
     perform set_config('request.jwt.claims', json_build_object('sub', F, 'role', 'authenticated')::text, true);
     perform set_config('request.jwt.claim.sub', F::text, true);
     set local role authenticated;
-    update public.sightings set count = 3 where id = S1;
+    update public.sightings set notes = notes where id = S1;      -- what a re-sync does
     select review_status into v from public.sightings where id = S1;
-    r := r || jsonb_build_object('a','7 reviewer','t','an edited record goes back to pending review','ok', v = 'pending','d', v);
+    r := r || jsonb_build_object('a','7 reviewer','t','re-syncing an unchanged record keeps it verified','ok', v = 'verified','d', v);
+    begin
+      delete from public.sightings where id = S1;
+      r := r || jsonb_build_object('a','7 reviewer','t','observers cannot delete verified records','ok', false,'d', 'deleted');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','observers cannot delete verified records','ok', true,'d', sqlerrm); end;
+    perform public.review_observation(S1, 'comment', null, 'Thanks, I have more photos');
+    r := r || jsonb_build_object('a','7 reviewer','t','observer can reply in the review history','ok', true,'d', '');
+    begin
+      perform public.review_observation(S1, 'verify', null, '');
+      r := r || jsonb_build_object('a','7 reviewer','t','observers cannot verify records','ok', false,'d', 'verified');
+    exception when others then r := r || jsonb_build_object('a','7 reviewer','t','observers cannot verify records','ok', true,'d', sqlerrm); end;
+    update public.sightings set count = 3 where id = S1;
+    select review_status, original_species_id = any_sp into v, b from public.sightings where id = S1;
+    r := r || jsonb_build_object('a','7 reviewer','t','a real edit sends the record back to review (original ID still kept)','ok', v = 'pending' and b,'d', v);
+    delete from public.sightings where id = '00000000-0000-4000-8000-0000000b0009';
+    get diagnostics n = row_count;
+    r := r || jsonb_build_object('a','7 reviewer','t','observers can delete their own unverified records','ok', n = 1,'d', '');
     reset role;
 
     -- ── payment server (Edge Function with the service-role key) ─────────────
@@ -262,6 +338,28 @@ begin
       r := r || jsonb_build_object('a','9 privacy','t','exact coordinates never reach the public','ok', n = 0,'d', '');
       reset role;
     end if;
+
+    -- ── privacy: private / restricted observations never appear publicly ─────
+    perform set_config('request.jwt.claims', '', true); perform set_config('request.jwt.claim.sub', '', true);
+    insert into public.sightings (id, trip_id, user_id, species_id, count, lat, lng, region_code, privacy) values
+      ('00000000-0000-4000-8000-0000000b00a1', T1, F, any_sp, 1, 11.5555, 92.6666, g_region, 'private'),
+      ('00000000-0000-4000-8000-0000000b00a2', T1, F, any_sp, 1, 11.5556, 92.6667, g_region, 'restricted');
+    perform set_config('request.jwt.claims', claims_anon, true);
+    set local role anon;
+    select count(*) into n from public.public_observations() o where o.id in ('00000000-0000-4000-8000-0000000b00a1', '00000000-0000-4000-8000-0000000b00a2');
+    r := r || jsonb_build_object('a','9 privacy','t','private and restricted observations stay off the public map','ok', n = 0,'d', n || ' leaked');
+    begin
+      select count(*) into n from public.public_leaderboard(null, null, null, 50);
+      r := r || jsonb_build_object('a','9 privacy','t','leaderboard is public (species counts only, no locations)','ok', true,'d', n || ' recorders');
+    exception when others then r := r || jsonb_build_object('a','9 privacy','t','leaderboard is public','ok', false,'d', sqlerrm); end;
+    reset role;
+    update public.platform_settings set value = 'false' where key = 'require_packs';
+    perform set_config('request.jwt.claims', json_build_object('sub', BL, 'role', 'authenticated')::text, true);
+    perform set_config('request.jwt.claim.sub', BL::text, true);
+    set local role authenticated;
+    select count(*) into n from public.species_full;
+    r := r || jsonb_build_object('a','9 privacy','t','Admin setting can open full species pages to all users','ok', n > 0,'d', n || ' visible');
+    reset role;
 
     -- ── self-repair + live updates ───────────────────────────────────────────
     perform set_config('request.jwt.claims', '', true); perform set_config('request.jwt.claim.sub', '', true);

@@ -77,10 +77,12 @@ export function OffListFlag({ n, title }: { n?: number; title?: string }) {
 }
 
 export function ReviewBadge({ status }: { status: ReviewStatus | "mixed" }) {
-  if (status === "accepted") return <Badge variant="success">Accepted</Badge>;
+  if (status === "verified" || status === "accepted") return <Badge variant="success">Verified</Badge>;
   if (status === "rejected") return <Badge variant="destructive">Rejected</Badge>;
+  if (status === "needs_id") return <Badge variant="warning">Needs ID</Badge>;
+  if (status === "more_info") return <Badge variant="warning">More info</Badge>;
   if (status === "mixed") return <Badge variant="secondary">Partly reviewed</Badge>;
-  return <Badge variant="warning">Pending</Badge>;
+  return <Badge variant="secondary">Pending</Badge>;
 }
 
 export function SpeciesName({ id, text, compact }: { id?: string | null; text?: string; compact?: boolean }) {
@@ -117,14 +119,19 @@ export function SearchInput({ value, onChange, placeholder = "Search…", classN
 /** Region <select>: countries with their states, plus optional "All regions". */
 export function RegionSelect({ value, onChange, allowAll, className, id }: { value: string; onChange: (v: string) => void; allowAll?: boolean; className?: string; id?: string }) {
   const { regions } = useData();
-  const countries = regions.filter((r) => !r.parent);
+  const kids = (code: string | null) => regions.filter((r) => (r.parent || null) === code).sort((a, b) => (a.sort || 0) - (b.sort || 0) || a.name.localeCompare(b.name));
+  const rows: React.ReactNode[] = [];
+  const walk = (code: string, depth: number) => kids(code).forEach((r) => {
+    rows.push(<option key={r.code} value={r.code}>{"\u00a0\u00a0".repeat(depth) + r.name}{r.kind === "island" ? " (island)" : r.kind === "protected_area" ? " (PA)" : ""}</option>);
+    walk(r.code, depth + 1);
+  });
   return (
     <NativeSelect id={id} value={value} onChange={(e) => onChange(e.target.value)} className={className} aria-label="Region">
       {allowAll && <option value="">All regions</option>}
-      {countries.map((c) => (
+      {kids(null).map((c) => (
         <optgroup key={c.code} label={c.name}>
           <option value={c.code}>{c.name} (country)</option>
-          {regions.filter((r) => r.parent === c.code).map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
+          {(() => { rows.length = 0; walk(c.code, 0); return [...rows]; })()}
         </optgroup>
       ))}
     </NativeSelect>

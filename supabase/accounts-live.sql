@@ -238,3 +238,132 @@ exception when others then return new;
 end $$;
 drop trigger if exists access_from_signup on public.profiles;
 create trigger access_from_signup after insert on public.profiles for each row execute function public.access_from_signup();
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- SOLE ADMIN: the platform owner is the only Admin, enforced in the database.
+--   • nobody can become Admin from the app (no claim, no request, no grant)
+--   • the owner cannot be demoted, suspended or deleted from the app
+--   • ownership can only be set from the Supabase SQL Editor:
+--       select public.set_platform_owner('you@example.com');
+-- ═══════════════════════════════════════════════════════════════════════════
+create table if not exists public.platform_owner (
+  singleton boolean primary key default true check (singleton),
+  user_id   uuid not null unique references auth.users(id),
+  set_at    timestamptz not null default now()
+);
+alter table public.platform_owner enable row level security;
+drop policy if exists "owner: read" on public.platform_owner;
+create policy "owner: read" on public.platform_owner for select to authenticated using (true);
+
+-- adopt the existing admin as owner (earliest one); any other admins become reviewers
+do $$
+declare first_admin uuid;
+begin
+  if not exists (select 1 from public.platform_owner) then
+    select p.id into first_admin from public.profiles p where p.role = 'admin' order by p.created_at nulls last limit 1;
+    if first_admin is not null then insert into public.platform_owner (user_id) values (first_admin); end if;
+  end if;
+  perform set_config('hw.owner_tx', 'on', true);
+  update public.profiles set role = 'reviewer' where role = 'admin' and id <> coalesce((select user_id from public.platform_owner), '00000000-0000-0000-0000-000000000000');
+end $$;
+
+-- Admin = the platform owner. Nothing else.
+create or replace function public.is_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select auth.uid() is not null and exists (select 1 from public.platform_owner o where o.user_id = auth.uid());
+$$;
+create or replace function public.is_reviewer() returns boolean
+language sql security definer stable set search_path = public as $$
+  select public.is_admin() or exists (select 1 from public.profiles where id = auth.uid() and role = 'reviewer' and status = 'approved');
+$$;
+create or replace function public.has_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from public.platform_owner);
+$$;
+
+create or replace function public.guard_profile() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare owner uuid := (select user_id from public.platform_owner);
+begin
+  -- 1. only the platform owner may ever hold the admin role
+  if new.role = 'admin' and new.id is distinct from owner then
+    raise exception 'Only the platform owner can be Admin.' using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' then
+    -- 2. the owner account cannot be demoted or suspended from the app
+    if old.id = owner and auth.uid() is not null and (new.role <> 'admin' or new.status <> 'approved') then
+      raise exception 'The platform owner account cannot be demoted or suspended.' using errcode = '42501';
+    end if;
+    -- 3. only the Admin changes roles or account status
+    if auth.uid() is not null and not public.is_admin()
+       and (new.role is distinct from old.role or new.status is distinct from old.status) then
+      raise exception 'Only the Admin changes roles or account status.' using errcode = '42501';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_profile on public.profiles;
+create trigger guard_profile before insert or update on public.profiles for each row execute function public.guard_profile();
+
+create or replace function public.guard_owner_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.id = (select user_id from public.platform_owner) and auth.uid() is not null then
+    raise exception 'The platform owner account cannot be deleted from the app.' using errcode = '42501';
+  end if;
+  return old;
+end $$;
+drop trigger if exists guard_owner_delete on public.profiles;
+create trigger guard_owner_delete before delete on public.profiles for each row execute function public.guard_owner_delete();
+
+-- SQL Editor only: set / transfer platform ownership
+create or replace function public.set_platform_owner(p_email text) returns text
+language plpgsql security definer set search_path = public as $$
+declare uid uuid; prev uuid;
+begin
+  if auth.uid() is not null then raise exception 'Run this from the Supabase SQL Editor only.' using errcode = '42501'; end if;
+  select id into uid from auth.users where lower(email) = lower(trim(p_email));
+  if uid is null then raise exception 'No account with e-mail % (sign up in the app first).', p_email; end if;
+  perform public.create_profile_for(uid);
+  select user_id into prev from public.platform_owner;
+  update public.profiles set role = 'reviewer' where role = 'admin' and id <> uid;
+  delete from public.platform_owner;
+  insert into public.platform_owner (user_id) values (uid);
+  update public.profiles set role = 'admin', status = 'approved' where id = uid;
+  return format('%s is now the platform owner and sole Admin%s', p_email, case when prev is not null and prev <> uid then ' (previous owner is now a reviewer)' else '' end);
+end $$;
+revoke all on function public.set_platform_owner(text) from public, anon, authenticated;
+
+-- the first-admin shortcut is gone: ownership is set only from the SQL Editor
+drop function if exists public.claim_first_admin();
+
+-- access requests: reviewer only
+update public.access_requests set requested_role = 'reviewer' where requested_role = 'admin';
+do $$ begin
+  if exists (select 1 from pg_constraint where conname = 'access_requests_requested_role_check') then
+    alter table public.access_requests drop constraint access_requests_requested_role_check;
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'access_requests_reviewer_only') then
+    alter table public.access_requests add constraint access_requests_reviewer_only check (requested_role = 'reviewer');
+  end if;
+end $$;
+create or replace function public.request_access(p_role text, p_note text default '') returns public.access_requests
+language plpgsql security definer set search_path = public as $$
+declare r public.access_requests;
+begin
+  if auth.uid() is null then raise exception 'sign in first'; end if;
+  if p_role <> 'reviewer' then raise exception 'Only reviewer access can be requested. The Admin role belongs to the platform owner.' using errcode = '42501'; end if;
+  update public.access_requests set note = left(coalesce(p_note, ''), 500), created_at = now()
+   where user_id = auth.uid() and status = 'pending' returning * into r;
+  if r.id is null then insert into public.access_requests (user_id, requested_role, note) values (auth.uid(), 'reviewer', left(coalesce(p_note, ''), 500)) returning * into r; end if;
+  return r;
+end $$;
+create or replace function public.access_from_signup() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (select raw_user_meta_data->>'requested_role' from auth.users where id = new.id) in ('reviewer', 'admin') then
+    insert into public.access_requests (user_id, requested_role, note) values (new.id, 'reviewer', 'Requested at sign-up') on conflict do nothing;
+  end if;
+  return new;
+exception when others then return new;
+end $$;

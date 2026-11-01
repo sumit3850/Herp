@@ -1,398 +1,96 @@
-/* HerpWatch — shared data layer for app.html, admin.html and index.html.
+/* HerpWatch — shared data layer for the field app, dashboard, website and feedback page.
  *
- * HW.api exposes ONE interface with two back-ends:
- *   • Supabase  (config.js has SUPABASE_URL)  — production; RLS enforces access
- *   • Demo      (no URL)                     — localStorage, seed catalogue, instant "purchases"
- * Pages never talk to Supabase directly, so both modes behave the same.
+ * One API (HW.api) on top of Supabase. All security lives in the database
+ * (row-level security + triggers in supabase/setup.sql); this file only shapes data.
+ *
+ *   Roles: user · reviewer · admin (the platform owner, the only Admin; enforced in SQL)
+ *   Field data: herping sessions (trips) → observations (sightings) → photos, GPS track points
+ *   Offline: everything is queued on the device by the field app and synced with
+ *            client-generated ids + upserts, so re-sending never duplicates a record.
  */
 (function () {
   const C = window.HW_CONFIG || {};
-  const SEED = window.HW_SEED;
-  const DEMO = !C.SUPABASE_URL;
-  // navigator.onLine lies on many phones, so connectivity = the outcome of the last real request.
-  // Every request is capped (no endless "Saving…" with a weak signal).
-  const net = { ok: true, at: 0 };
-  const setNet = (okNow) => { if (net.ok !== okNow) { net.ok = okNow; dispatchEvent(new CustomEvent('hw-net', { detail: okNow })); } net.at = Date.now(); };
-  const timedFetch = async (url, opts = {}) => {
-    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), /\/functions\/v1\//.test(String(url)) ? 30000 : 15000);
-    if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort());
-    try { const r = await fetch(url, { ...opts, signal: ctrl.signal }); setNet(true); return r; }
-    catch (e) { setNet(false); throw new Error(e.name === 'AbortError' ? 'No connection (request timed out)' : 'No connection'); }
-    finally { clearTimeout(t); }
-  };
-  // e-mail links (confirm / reset password) arrive as #access_token=…&type=recovery or #error=…
-  const _linkParams = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + (location.search || '').replace(/^\?/, ''));
-  let _recovery = _linkParams.get('type') === 'recovery';
-  const _linkError = _linkParams.get('error_description') || _linkParams.get('error') || '';
-  const sb = !DEMO && window.supabase ? window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY, { global: { fetch: timedFetch } }) : null;
-  const authListeners = new Set();
-  if (sb) sb.auth.onAuthStateChange((evt, session) => { if (evt === 'PASSWORD_RECOVERY') _recovery = true; authListeners.forEach((f) => { try { f(evt, session); } catch {} }); });
-  // Plain-language versions of Supabase Auth errors, incl. the built-in mailer limits
-  function authError(error, email) {
-    const m = String(error?.message || error || ''), code = error?.code || error?.error_code || '';
-    if (/rate limit/i.test(m) || code === 'over_email_send_rate_limit' || error?.status === 429)
-      return codedError('email_rate_limit', 'Too many e-mails were sent in a short time. Supabase’s built-in mailer allows only a few per hour, so please wait a while and try again (the admin can add their own e-mail server in Supabase to remove this limit).');
-    if (/not authorized/i.test(m) || code === 'email_address_not_authorized')
-      return codedError('email_not_authorized', `Supabase’s built-in mailer can only send to the project team’s addresses, so ${email || 'this address'} was refused. The admin needs to set up an e-mail server (SMTP) in Supabase, or turn off "Confirm email".`);
-    if (/error sending|sending.*email|smtp/i.test(m))
-      return codedError('email_send_failed', 'Supabase could not send the e-mail. The admin needs to check the e-mail (SMTP) settings in Supabase, or turn off "Confirm email" for sign-ups.');
-    if (/signups? not allowed|signup.*disabled/i.test(m) || code === 'signup_disabled') return codedError('signup_disabled', 'New sign-ups are switched off for this project.');
-    if (/expired|invalid.*(link|token)|otp/i.test(m)) return codedError('link_expired', 'This e-mail link has expired or was already used. Request a new one.');
-    return Object.assign(new Error(m), { code });
-  }
-  const isNetError = (e) => /no connection|failed to fetch|network|load failed|timed out|offline/i.test(String(e?.message || e));
+  const SEED = window.HW_SEED || {};
+  const CONFIGURED = !!(C.SUPABASE_URL && C.SUPABASE_ANON_KEY);
 
-  // ───────── constants ─────────
+  // ───────── reference lists ─────────
   const IUCN = {
-    CR: { name: 'Critically Endangered', color: '#c53030' },
-    EN: { name: 'Endangered', color: '#dd6b20' },
-    VU: { name: 'Vulnerable', color: '#d69e2e' },
-    NT: { name: 'Near Threatened', color: '#68a14a' },
-    LC: { name: 'Least Concern', color: '#2f855a' },
-    DD: { name: 'Data Deficient', color: '#718096' },
-    NE: { name: 'Not Evaluated', color: '#a0aec0' },
+    EX: { name: 'Extinct', color: '#000000' }, EW: { name: 'Extinct in the Wild', color: '#542344' },
+    CR: { name: 'Critically Endangered', color: '#c53030' }, EN: { name: 'Endangered', color: '#dd6b20' },
+    VU: { name: 'Vulnerable', color: '#b7791f' }, NT: { name: 'Near Threatened', color: '#5a8f3c' },
+    LC: { name: 'Least Concern', color: '#2f855a' }, DD: { name: 'Data Deficient', color: '#718096' }, NE: { name: 'Not Evaluated', color: '#a0aec0' },
   };
   const VENOM = {
-    venomous: { label: 'Venomous', short: 'Venomous', color: '#c53030', icon: '⚠' },
-    mild: { label: 'Mildly venomous (not medically significant)', short: 'Mildly venomous', color: '#d69e2e', icon: '!' },
-    non: { label: 'Non-venomous', short: 'Non-venomous', color: '#2f855a', icon: '✓' },
+    venomous: { label: 'Venomous', short: 'Venomous', color: '#c53030' },
+    mild: { label: 'Mildly venomous (not medically significant)', short: 'Mildly venomous', color: '#b7791f' },
+    non: { label: 'Non-venomous', short: 'Non-venomous', color: '#2f855a' },
   };
-  const TOXIC = {
-    poisonous: { label: 'Poisonous (toxic skin/secretions)', short: 'Poisonous', color: '#9b2c2c' },
-    non: { label: 'Non-poisonous', short: 'Non-poisonous', color: '#4a5568' },
+  const TOXIC = { poisonous: { label: 'Poisonous (toxic skin/secretions)', short: 'Poisonous' }, non: { label: 'Non-poisonous', short: 'Non-poisonous' } };
+  const SURVEY_TYPES = {
+    day: 'Day herping', night: 'Night herping', road: 'Road survey', transect: 'Transect survey', habitat: 'Habitat survey',
+    opportunistic: 'Opportunistic observation', creek_mangrove: 'Creek & mangrove survey', stream_wetland: 'Stream & wetland survey',
   };
-  // approximate centroids [lat,lng] used for demo data and region auto-detect
-  const CENTROIDS = {
-    'IN-AN': [11.7, 92.7], 'IN-AP': [15.9, 79.7], 'IN-AR': [28.2, 94.7], 'IN-AS': [26.2, 92.9], 'IN-BR': [25.9, 85.3],
-    'IN-CH': [30.73, 76.78], 'IN-CT': [21.3, 81.9], 'IN-DH': [20.4, 73.0], 'IN-DL': [28.6, 77.2], 'IN-GA': [15.4, 74.0],
-    'IN-GJ': [22.3, 71.2], 'IN-HR': [29.1, 76.1], 'IN-HP': [31.9, 77.2], 'IN-JK': [33.8, 75.0], 'IN-JH': [23.6, 85.3],
-    'IN-KA': [14.6, 75.9], 'IN-KL': [10.3, 76.4], 'IN-LA': [34.2, 77.6], 'IN-LD': [10.6, 72.6], 'IN-MP': [23.5, 78.6],
-    'IN-MH': [19.5, 75.7], 'IN-MN': [24.7, 93.9], 'IN-ML': [25.5, 91.3], 'IN-MZ': [23.2, 92.9], 'IN-NL': [26.1, 94.5],
-    'IN-OR': [20.5, 84.4], 'IN-PY': [11.94, 79.8], 'IN-PB': [31.1, 75.3], 'IN-RJ': [26.9, 73.8], 'IN-SK': [27.5, 88.5],
-    'IN-TN': [11.1, 78.6], 'IN-TG': [17.9, 79.1], 'IN-TR': [23.9, 91.7], 'IN-UP': [27.0, 80.9], 'IN-UT': [30.1, 79.0],
-    'IN-WB': [23.0, 87.9], 'LK': [7.9, 80.7], 'NP': [28.4, 84.1], 'BD': [23.7, 90.4], 'BT': [27.5, 90.4], 'IN': [22.5, 79.0],
+  const STATUSES = {
+    pending: { label: 'Pending review', tone: 'pending' }, verified: { label: 'Verified', tone: 'ok' }, needs_id: { label: 'Needs identification', tone: 'warn' },
+    more_info: { label: 'More information required', tone: 'warn' }, rejected: { label: 'Rejected', tone: 'bad' },
   };
+  const EVIDENCE = { direct: 'Direct sighting', shed_skin: 'Shed skin', eggs: 'Eggs / egg shells', tracks: 'Tracks / trails', call: 'Call heard (frogs)', remains: 'Remains / skeleton', photo_only: 'Photo only (camera trap etc.)' };
+  const LIFE_STAGES = ['Adult', 'Subadult', 'Juvenile', 'Hatchling', 'Egg', 'Tadpole', 'Metamorph', 'Unknown'];
+  const SEXES = ['Unknown', 'Male', 'Female', 'Mixed'];
+  const HABITATS = ['Evergreen forest', 'Semi-evergreen forest', 'Moist deciduous forest', 'Dry deciduous forest', 'Scrub', 'Grassland', 'Mangrove', 'Beach / coast', 'Littoral forest',
+    'Stream / river', 'Pond / wetland', 'Paddy / farmland', 'Plantation', 'Village / urban', 'Rocky outcrop / cliff', 'Cave', 'Road / roadside', 'Other'];
+  const MICROHABITATS = ['Leaf litter', 'Under log', 'Under rock', 'Tree trunk', 'Branch / shrub', 'Canopy', 'Tree hole', 'Burrow', 'Termite mound', 'In water', 'Water edge / bank',
+    'Building wall', 'Inside building', 'Road surface', 'Open ground', 'Other'];
+  const BEHAVIOURS = ['Basking', 'Resting', 'Moving', 'Foraging', 'Feeding', 'Calling', 'Mating / amplexus', 'Defensive display', 'Fleeing', 'Hiding', 'Shedding', 'Nesting', 'Dead'];
+  const GROUPS = { snake: 'Snakes', lizard: 'Lizards', gecko: 'Geckos', skink: 'Skinks', agama: 'Agamas', monitor: 'Monitors', chameleon: 'Chameleons',
+    turtle: 'Turtles', tortoise: 'Tortoises', crocodilian: 'Crocodilians', frog: 'Frogs', toad: 'Toads', caecilian: 'Caecilians' };
+  const GROUP_CLASS = { snake: 'snake', lizard: 'lizard', gecko: 'lizard', skink: 'lizard', agama: 'lizard', monitor: 'lizard', chameleon: 'lizard',
+    turtle: 'turtle_croc', tortoise: 'turtle_croc', crocodilian: 'turtle_croc', frog: 'amphibian', toad: 'amphibian', caecilian: 'amphibian' };
 
   // ───────── small utils ─────────
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const rupees = (paise) => '₹' + (paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 });
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn('storage', e); } };
   function haversineKm(a, b) {
-    const R = 6371, r = Math.PI / 180;
-    const dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+    const R = 6371, r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
     const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
   }
   const trackKm = (pts) => pts.reduce((s, p, i) => (i ? s + haversineKm(pts[i - 1], p) : 0), 0);
-  function nearestRegion(lat, lng) {
-    let best = null, bd = 1e9;
-    for (const [code, c] of Object.entries(CENTROIDS)) {
-      if (code === 'IN') continue;
-      const d = haversineKm([lat, lng], c);
-      if (d < bd) { bd = d; best = code; }
-    }
-    return best;
-  }
-  // ── durable storage (pattern from the Island Explorer driver app) ──
-  // Field data is written to localStorage + IndexedDB + the Cache API. Some mobile
-  // browsers clear localStorage between sessions; whichever store survived is used
-  // to restore the others, so an unsynced checklist is never lost.
-  function idb() {
-    return new Promise((res) => {
-      try { const r = indexedDB.open('hw_durable', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
-      catch { res(null); }
-    });
-  }
-  const idbSet = async (k, v) => { const db = await idb(); if (!db) return; try { const tx = db.transaction('kv', 'readwrite'); v == null ? tx.objectStore('kv').delete(k) : tx.objectStore('kv').put(v, k); } catch {} };
-  const idbGet = async (k) => { const db = await idb(); if (!db) return null; return new Promise((res) => { try { const g = db.transaction('kv').objectStore('kv').get(k); g.onsuccess = () => res(g.result ?? null); g.onerror = () => res(null); } catch { res(null); } }); };
-  const cacheSet = async (k, v) => { try { const c = await caches.open('hw_durable'); const u = '/__hw_durable/' + encodeURIComponent(k); v == null ? await c.delete(u) : await c.put(u, new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } })); } catch {} };
-  const cacheGet = async (k) => { try { const r = await (await caches.open('hw_durable')).match('/__hw_durable/' + encodeURIComponent(k)); return r ? r.json() : null; } catch { return null; } };
-  function durSet(k, v) { v == null ? (() => { try { localStorage.removeItem(k); } catch {} })() : lsSet(k, v); idbSet(k, v); cacheSet(k, v); }
-  async function durGet(k) {
-    let v = lsGet(k, null); if (v != null) return v;
-    v = await idbGet(k); if (v != null) { lsSet(k, v); return v; }
-    v = await cacheGet(k); if (v != null) { lsSet(k, v); idbSet(k, v); return v; }
-    return null;
-  }
-  const storageWorks = () => { try { localStorage.setItem('hw_ck', '1'); const ok = localStorage.getItem('hw_ck') === '1'; localStorage.removeItem('hw_ck'); return ok; } catch { return false; } };
-  try { navigator.storage?.persist?.(); } catch {}
-  const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-  const isInAppBrowser = () => /WhatsApp|FBAN|FBAV|FB_IAB|Instagram|Line\/|Telegram|Snapchat/i.test(navigator.userAgent || '');
-
-  // Errors with a machine-readable code so the UI can offer the right next step
   const codedError = (code, message) => Object.assign(new Error(message), { code });
-  // Public maps never show exact points: ~1 km normally, ~10 km for sensitive species
-  const coarsen = (v, sensitive) => Math.round(v * (sensitive ? 10 : 100)) / (sensitive ? 10 : 100);
-
-  // ───────── shared stats (demo computes in JS; Supabase returns the same shape from public_stats()) ─────────
-  function computeStats(species, sightings, roadkill, surveys) {
-    const sp = Object.fromEntries(species.map((s) => [s.id, s]));
-    const count = (arr, key) => { const m = {}; arr.forEach((x) => { const k = key(x); if (k != null) m[k] = (m[k] || 0) + (x.count || 1); }); return m; };
-    const month = (d) => String(d).slice(0, 7);
-    const months = {};
-    sightings.forEach((s) => { const m = month(s.observed_at); (months[m] ||= { month: m, sightings: 0, roadkill: 0 }).sightings += s.count || 1; });
-    roadkill.forEach((s) => { const m = month(s.observed_at); (months[m] ||= { month: m, sightings: 0, roadkill: 0 }).roadkill += s.count || 1; });
-    const toArr = (m, k) => Object.entries(m).map(([key, n]) => ({ [k]: key, n })).sort((a, b) => b.n - a.n);
-    const topSp = (arr) => toArr(count(arr, (x) => x.species_id), 'species_id').slice(0, 12)
-      .map((r) => ({ ...r, common: sp[r.species_id]?.common || r.species_id, sci: sp[r.species_id]?.sci || '' }));
-    const surveyKm = surveys.reduce((s, x) => s + (x.distance_km || 0), 0);
-    return {
-      totals: {
-        sightings: sightings.reduce((s, x) => s + (x.count || 1), 0),
-        records: sightings.length,
-        species: new Set(sightings.map((s) => s.species_id).filter(Boolean)).size,
-        observers: new Set([...sightings, ...roadkill].map((s) => s.user_id)).size,
-        roadkill: roadkill.reduce((s, x) => s + (x.count || 1), 0),
-        roadkill_surveys: surveys.length,
-        roadkill_km: Math.round(surveyKm * 10) / 10,
-        roadkill_per_100km: surveyKm ? Math.round((roadkill.reduce((s, x) => s + (x.count || 1), 0) / surveyKm) * 1000) / 10 : 0,
-      },
-      by_pack: toArr(count(sightings, (x) => sp[x.species_id]?.pack || x.pack), 'pack'),
-      roadkill_by_pack: toArr(count(roadkill, (x) => sp[x.species_id]?.pack || x.pack), 'pack'),
-      by_iucn: toArr(count(sightings, (x) => sp[x.species_id]?.iucn), 'iucn'),
-      by_venom: toArr(count(sightings.filter((x) => sp[x.species_id]?.pack === 'snakes'), (x) => sp[x.species_id]?.venom), 'venom'),
-      by_region: toArr(count(sightings, (x) => x.region_code), 'region'),
-      by_month: Object.values(months).sort((a, b) => a.month.localeCompare(b.month)),
-      top_species: topSp(sightings),
-      roadkill_species: topSp(roadkill),
-    };
+  function toCSV(rows) {
+    if (!rows.length) return '';
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((k) => typeof rows.find((r) => r[k] != null)?.[k] !== 'object');
+    const q = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
+    return [cols.join(','), ...rows.map((r) => cols.map((c) => q(r[c])).join(','))].join('\n');
+  }
+  function download(name, data, type = 'text/csv') {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type })); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+  /** Excel (.xlsx) via SheetJS, loaded on first use */
+  async function downloadXlsx(name, sheets) {
+    if (!window.XLSX) await new Promise((ok, no) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload = ok; s.onerror = () => no(new Error('Could not load the Excel library (are you online?)')); document.head.appendChild(s); });
+    const wb = XLSX.utils.book_new();
+    for (const [title, rows] of Object.entries(sheets)) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{}]), title.slice(0, 31));
+    XLSX.writeFile(wb, name);
+  }
+  /** "PDF": a clean printable report opened in a new window (Save as PDF from the print dialog) */
+  function printReport(title, subtitle, columns, rows) {
+    const w = window.open('', '_blank');
+    if (!w) throw new Error('Allow pop-ups to create the PDF');
+    const head = columns.map((c) => `<th>${esc(c.label)}</th>`).join('');
+    const body = rows.map((r) => `<tr>${columns.map((c) => `<td>${esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+      body{font:12px/1.4 system-ui,sans-serif;color:#16231c;margin:24px}h1{font-size:20px;margin:0}p{color:#56685d;margin:4px 0 14px}
+      table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e3e0d5;padding:5px 6px;text-align:left;vertical-align:top}th{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#56685d}
+      tr{break-inside:avoid}@page{size:A4 landscape;margin:12mm}</style></head><body><h1>${esc(title)}</h1><p>${esc(subtitle)}</p><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      <script>setTimeout(()=>print(),400)<\/script></body></html>`);
+    w.document.close();
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  //  DEMO BACK-END (localStorage)
-  // ════════════════════════════════════════════════════════════════════
-  const DKEY = 'hw_demo_db_v3';
-  function demoDb() {
-    let db = lsGet(DKEY, null);
-    if (db) return db;
-    db = {
-      packs: SEED.PACKS, regions: SEED.REGIONS, prices: SEED.PRICES.map((p) => ({ id: uid(), ...p })),
-      species: SEED.SPECIES, checklists: Object.fromEntries(SEED.CHECKLISTS.map((c) => [c.region, c.species])),
-      users: [
-        { id: 'u-admin', email: 'admin@demo', password: 'admin', username: 'admin', full_name: 'Demo Admin', role: 'admin', status: 'approved', home_region: 'IN-AN' },
-        { id: 'u-field', email: 'field@demo', password: 'field', username: 'fielder', full_name: 'Demo Field User', role: 'user', status: 'approved', home_region: 'IN-KL' },
-        { id: 'u-anu', email: 'anu@demo', password: 'anu', username: 'anu.k', full_name: 'Anu K (sample)', role: 'reviewer', status: 'approved', home_region: 'IN-KL' },
-        { id: 'u-ravi', email: 'ravi@demo', password: 'ravi', username: 'ravi.s', full_name: 'Ravi S (sample)', role: 'user', status: 'pending', home_region: 'IN-AN' },
-      ],
-      entitlements: [{ id: uid(), user_id: 'u-field', pack: 'frogs', region: 'IN-KL', valid_until: new Date(Date.now() + 300 * 864e5).toISOString(), source: 'manual' }],
-      trips: [], sightings: [], surveys: [], roadkill: [], session: null,
-    };
-    seedDemoRecords(db);
-    lsSet(DKEY, db);
-    return db;
-  }
-  const saveDemo = (db) => lsSet(DKEY, db);
-  // deterministic sample observations so the website & dashboard have something to show
-  function seedDemoRecords(db) {
-    let x = 42; const rnd = () => ((x = (x * 16807) % 2147483647) / 2147483647);
-    const today = new Date();
-    const observers = ['u-field', 'u-admin', 'u-anu', 'u-ravi'];
-    const protos = ['traveling', 'stationary', 'night_walk', 'incidental', 'area'];
-    for (let k = 0; k < 60; k++) {
-      // one checklist (trip) in a random state, with 2–7 species from that state's checklist
-      const regs = Object.keys(CENTROIDS).filter((r) => r.startsWith('IN-') && (db.checklists[r] || []).length > 3);
-      const r = regs[Math.floor(rnd() * regs.length)], c = CENTROIDS[r];
-      const start = new Date(today.getTime() - rnd() * 365 * 864e5), dur = 20 + Math.floor(rnd() * 160);
-      const lat = c[0] + (rnd() - .5) * 1.2, lng = c[1] + (rnd() - .5) * 1.2, proto = protos[Math.floor(rnd() * protos.length)];
-      const track = proto === 'traveling' || proto === 'night_walk' ? Array.from({ length: 12 }, (_, t) => [lat + t * .002 + (rnd() - .5) * .001, lng + t * .0015]) : [];
-      const trip = { id: uid(), user_id: observers[Math.floor(rnd() * observers.length)], region_code: r, protocol: proto, started_at: start.toISOString(),
-        ended_at: new Date(start.getTime() + dur * 6e4).toISOString(), duration_min: dur, distance_km: Math.round(trackKm(track) * 100) / 100, observers: 1 + Math.floor(rnd() * 3),
-        complete: proto !== 'incidental' && rnd() > .3, track, lat, lng, notes: '' };
-      db.trips.push(trip);
-      const pool = db.checklists[r]; const n = 2 + Math.floor(rnd() * 6), used = new Set();
-      for (let j = 0; j < n; j++) {
-        // ~7% of records are species NOT on the state's core checklist (range extensions / misIDs to review)
-        const offPool = db.species.filter((x) => !pool.includes(x.id));
-        const sid = rnd() < 0.07 && offPool.length ? offPool[Math.floor(rnd() * offPool.length)].id : pool[Math.floor(rnd() * pool.length)];
-        if (used.has(sid)) continue; used.add(sid);
-        const age = (today - start) / 864e5;
-        db.sightings.push({ id: uid(), user_id: trip.user_id, trip_id: trip.id, species_id: sid, species_text: '', count: 1 + Math.floor(rnd() * 4),
-          lat: lat + (rnd() - .5) * .01, lng: lng + (rnd() - .5) * .01, observed_at: new Date(start.getTime() + j * 5 * 6e4).toISOString(), region_code: r,
-          life_stage: ['adult', 'juvenile', ''][j % 3], sex: '', notes: '', photos: [],
-          review_status: age < 60 ? 'pending' : rnd() > .08 ? 'accepted' : 'rejected' });
-      }
-    }
-    // three road-kill surveys with tracks along a road near Port Blair / Kerala / Odisha
-    [['IN-AN', [11.62, 92.72], [11.85, 92.68]], ['IN-KL', [10.0, 76.3], [10.5, 76.9]], ['IN-OR', [20.3, 85.8], [20.9, 86.5]]].forEach(([reg, a, b], k) => {
-      const track = []; for (let t = 0; t <= 40; t++) track.push([a[0] + (b[0] - a[0]) * t / 40 + Math.sin(t / 4) * .01, a[1] + (b[1] - a[1]) * t / 40]);
-      const start = new Date(today.getTime() - (20 + k * 40) * 864e5);
-      const sv = { id: uid(), user_id: 'u-field', region_code: reg, mode: 'car', road_name: ['Andaman Trunk Road', 'NH 544', 'NH 16'][k], road_type: 'highway',
-        started_at: start.toISOString(), ended_at: new Date(start.getTime() + 90 * 6e4).toISOString(), track, distance_km: Math.round(trackKm(track) * 10) / 10, notes: '' };
-      db.surveys.push(sv);
-      const pool = db.species.filter((s) => s.regions.includes(reg));
-      for (let j = 0; j < 6 + k * 2; j++) {
-        const p = track[Math.floor(rnd() * track.length)], s = pool[Math.floor(rnd() * pool.length)];
-        db.roadkill.push({ id: uid(), survey_id: sv.id, user_id: 'u-field', species_id: s.id, pack: s.pack, count: 1, lat: p[0], lng: p[1],
-          observed_at: new Date(start.getTime() + j * 6e5).toISOString(), condition: ['fresh', 'flattened', 'decomposed'][j % 3], region_code: reg, notes: '' });
-      }
-    });
-  }
-  const demoMe = (db) => db.users.find((u) => u.id === db.session) || null;
-  const valid = (e) => !e.valid_until || new Date(e.valid_until) > new Date();
-  function demoCanSee(db, me, s) {
-    if (!me) return false;
-    if (me.role === 'admin') return true;
-    return db.entitlements.some((e) => e.user_id === me.id && e.pack === s.pack && valid(e) && (e.region === 'IN' ? s.regions.includes('IN') : s.regions.includes(e.region)));
-  }
-  const basic = (s) => ({ id: s.id, pack: s.pack, common: s.common, sci: s.sci, family: s.family, venom: s.venom, toxic: s.toxic, iucn: s.iucn, endemic: s.endemic, sensitive: s.sensitive, regions: s.regions });
-  const needAdmin = (db) => { const me = demoMe(db); if (!me || me.role !== 'admin') throw new Error('Admins only'); return me; };
-
-  const demoApi = {
-    mode: 'demo',
-    async session() { const db = demoDb(); return demoMe(db); },
-    async signIn(email, password) {
-      const db = demoDb();
-      const u = db.users.find((x) => (x.email.toLowerCase() === email.toLowerCase() || x.username === email) && x.password === password);
-      if (!u) throw new Error('Wrong email/username or password (demo: field@demo / field, admin@demo / admin)');
-      if (u.status === 'blocked') throw new Error('This account is blocked. Contact the administrator.');
-      db.session = u.id; saveDemo(db); return u;
-    },
-    async signUp(f) {
-      const db = demoDb();
-      if (db.users.some((u) => u.email.toLowerCase() === f.email.toLowerCase())) throw codedError('already_registered', `${f.email} already has an account (one account works for the app and the dashboard). Sign in instead.`);
-      const u = { id: uid(), email: f.email, password: f.password, username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, role: 'user', status: 'approved' };
-      db.users.push(u);
-      if (['reviewer', 'admin'].includes(f.requested_role)) (db.access ||= []).push({ id: uid(), user_id: u.id, requested_role: f.requested_role, note: 'Requested at sign-up', status: 'pending', created_at: new Date().toISOString() }); db.session = u.id; saveDemo(db); return u;
-    },
-    async resetPassword() { throw new Error('Password reset needs the Supabase back-end (demo mode).'); },
-    async resendConfirmation() {},
-    isRecovery: () => false, linkError: () => '', onAuth: () => () => {},
-    async hasAdmin() { return demoDb().users.some((u) => u.role === 'admin'); },
-    async claimFirstAdmin() { const db = demoDb(), me = demoMe(db); if (db.users.some((u) => u.role === 'admin')) throw new Error('This project already has an admin. Ask them to give you access.'); me.role = 'admin'; saveDemo(db); return me; },
-    async requestAccess(role, note = '') {
-      const db = demoDb(), me = demoMe(db); db.access ||= [];
-      let r = db.access.find((x) => x.user_id === me.id && x.status === 'pending');
-      if (r) Object.assign(r, { requested_role: role, note, created_at: new Date().toISOString() });
-      else db.access.push((r = { id: uid(), user_id: me.id, requested_role: role, note, status: 'pending', created_at: new Date().toISOString() }));
-      saveDemo(db); return r;
-    },
-    async myAccessRequest() { const db = demoDb(), me = demoMe(db); return (db.access || []).filter((x) => x.user_id === me?.id).slice(-1)[0] || null; },
-    async updatePassword() {},
-    async submitFeedback(f) {
-      if (!f.r_overall || f.r_overall < 1 || f.r_overall > 5) throw new Error('Please rate your overall experience.');
-      const db = demoDb(); (db.feedback ||= []).push({ id: uid(), created_at: new Date().toISOString(), user_id: db.session, status: 'new', ...f }); saveDemo(db);
-    },
-    async checklistEntries(region) {
-      const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
-      return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
-    },
-    /** Demo mode: the dashboard and app share localStorage, so edits in one tab reach the other. */
-    onCatalogChange(cb) {
-      const on = (e) => { if (e.key === DKEY) cb('demo', e); };
-      addEventListener('storage', on);
-      return () => removeEventListener('storage', on);
-    },
-    async signOut() { const db = demoDb(); db.session = null; saveDemo(db); },
-    async signInWithGoogle() { throw new Error('Google sign-in needs the Supabase back-end (you are in demo mode).'); },
-    async updateProfile(p) { const db = demoDb(); const me = demoMe(db); Object.assign(me, p); saveDemo(db); return me; },
-    async packs() { return demoDb().packs; },
-    async regions() { return demoDb().regions; },
-    async prices() { return demoDb().prices; },
-    async speciesIndex() { return demoDb().species.map(basic); },
-    async speciesFull(id) {
-      const db = demoDb(), s = db.species.find((x) => x.id === id);
-      return s && demoCanSee(db, demoMe(db), s) ? s : null;
-    },
-    async unlockedSpecies() { const db = demoDb(), me = demoMe(db); return db.species.filter((s) => demoCanSee(db, me, s)); },
-    async checklist(region) { return demoDb().checklists[region] || []; },
-    async myEntitlements() { const db = demoDb(), me = demoMe(db); return me ? db.entitlements.filter((e) => e.user_id === me.id && valid(e)) : []; },
-    async quote(items) { return quoteFrom(demoDb().prices, items); },
-    async checkout(items) {
-      const db = demoDb(), me = demoMe(db); if (!me) throw new Error('Sign in first');
-      const q = quoteFrom(db.prices, items);
-      q.lines.forEach((l) => db.entitlements.push({ id: uid(), user_id: me.id, pack: l.pack, region: l.region, source: 'demo',
-        valid_until: new Date(Date.now() + l.days * 864e5).toISOString(), payment_ref: 'demo-' + Date.now() }));
-      saveDemo(db); return { ok: true, demo: true, amount: q.total };
-    },
-    // eBird-style checklist (trip) with its sightings, idempotent on client ids
-    async saveTrip(trip) {
-      const db = demoDb(), me = demoMe(db); if (!me) throw new Error('Sign in first');
-      db.trips = db.trips.filter((t) => t.id !== trip.id);
-      db.sightings = db.sightings.filter((s) => s.trip_id !== trip.id);
-      const { sightings, ...t } = trip;
-      db.trips.push({ ...t, user_id: me.id });
-      sightings.forEach((s) => db.sightings.push({ ...s, trip_id: trip.id, user_id: me.id, review_status: 'pending' }));
-      saveDemo(db); return true;
-    },
-    async saveRoadkill(survey) {
-      const db = demoDb(), me = demoMe(db); if (!me) throw new Error('Sign in first');
-      db.surveys = db.surveys.filter((t) => t.id !== survey.id);
-      db.roadkill = db.roadkill.filter((s) => s.survey_id !== survey.id);
-      const { records, ...sv } = survey;
-      db.surveys.push({ ...sv, user_id: me.id });
-      records.forEach((r) => db.roadkill.push({ ...r, survey_id: survey.id, user_id: me.id }));
-      saveDemo(db); return true;
-    },
-    async myTrips() { const db = demoDb(), me = demoMe(db); return db.trips.filter((t) => t.user_id === me?.id).sort((a, b) => String(b.started_at).localeCompare(a.started_at)).map((t) => ({ ...t, sightings: db.sightings.filter((s) => s.trip_id === t.id) })); },
-    async mySurveys() { const db = demoDb(), me = demoMe(db); return db.surveys.filter((t) => t.user_id === me?.id).sort((a, b) => String(b.started_at).localeCompare(a.started_at)).map((t) => ({ ...t, records: db.roadkill.filter((s) => s.survey_id === t.id) })); },
-    async publicStats() { const db = demoDb(); return computeStats(db.species, db.sightings.filter((s) => s.review_status !== 'rejected'), db.roadkill, db.surveys); },
-    async publicPoints() {
-      const db = demoDb(), sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
-      return [
-        ...db.sightings.filter((s) => s.review_status !== 'rejected' && s.lat != null).map((s) => ({ kind: 'sighting', species_id: s.species_id, pack: sp[s.species_id]?.pack, iucn: sp[s.species_id]?.iucn, lat: coarsen(s.lat, sp[s.species_id]?.sensitive), lng: coarsen(s.lng, sp[s.species_id]?.sensitive), month: String(s.observed_at).slice(0, 7) })),
-        ...db.roadkill.filter((s) => s.lat != null).map((s) => ({ kind: 'roadkill', species_id: s.species_id, pack: sp[s.species_id]?.pack || s.pack, iucn: sp[s.species_id]?.iucn, lat: coarsen(s.lat, sp[s.species_id]?.sensitive), lng: coarsen(s.lng, sp[s.species_id]?.sensitive), month: String(s.observed_at).slice(0, 7) })),
-      ];
-    },
-    publicTracks: async () => demoDb().surveys.map((s) => ({ id: s.id, road_name: s.road_name, distance_km: s.distance_km, track: s.track.map(([a, b]) => [coarsen(a), coarsen(b)]) })),
-    admin: {
-      async upsertSpecies(s) { const db = demoDb(); needAdmin(db); const i = db.species.findIndex((x) => x.id === s.id); i >= 0 ? (db.species[i] = s) : db.species.push(s); saveDemo(db); return s; },
-      async deleteSpecies(id) { const db = demoDb(); needAdmin(db); db.species = db.species.filter((x) => x.id !== id); Object.keys(db.checklists).forEach((r) => (db.checklists[r] = db.checklists[r].filter((x) => x !== id))); saveDemo(db); },
-      async allSpecies() { const db = demoDb(); needAdmin(db); return db.species; },
-      async setChecklist(region, ids) {
-        const db = demoDb(); needAdmin(db); db.checklists[region] = ids;
-        db.species.forEach((s) => { const has = ids.includes(s.id), had = s.regions.includes(region); if (has && !had) s.regions.push(region); if (!has && had) s.regions = s.regions.filter((r) => r !== region); });
-        saveDemo(db);
-      },
-      async upsertPrice(p) { const db = demoDb(); needAdmin(db); p.id ||= uid(); const i = db.prices.findIndex((x) => x.id === p.id); i >= 0 ? (db.prices[i] = p) : db.prices.push(p); saveDemo(db); },
-      async deletePrice(id) { const db = demoDb(); needAdmin(db); db.prices = db.prices.filter((x) => x.id !== id); saveDemo(db); },
-      async users() { const db = demoDb(); needAdmin(db); return db.users.map(({ password, ...u }) => ({ ...u, packs: db.entitlements.filter((e) => e.user_id === u.id && valid(e)) })); },
-      async setUser(id, patch) { const db = demoDb(); needAdmin(db); Object.assign(db.users.find((u) => u.id === id), patch); saveDemo(db); },
-      async grant(user_id, pack, region, days) { const db = demoDb(); const me = needAdmin(db); db.entitlements.push({ id: uid(), user_id, pack, region, source: 'manual', granted_by: me.username, valid_until: days ? new Date(Date.now() + days * 864e5).toISOString() : null }); saveDemo(db); },
-      async revoke(entId) { const db = demoDb(); needAdmin(db); const e = db.entitlements.find((x) => x.id === entId); if (e) e.valid_until = new Date().toISOString(); saveDemo(db); },
-      async sightings() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u.username])); return db.sightings.map((s) => ({ ...s, username: un[s.user_id] })).sort((a, b) => String(b.observed_at).localeCompare(a.observed_at)); },
-      async review(id, status, note = '') { const db = demoDb(); const me = needAdmin(db); Object.assign(db.sightings.find((s) => s.id === id), { review_status: status, review_note: note, reviewed_by: me.id, reviewed_at: new Date().toISOString() }); saveDemo(db); },
-      async deleteSighting(id) { const db = demoDb(); needAdmin(db); db.sightings = db.sightings.filter((s) => s.id !== id); saveDemo(db); },
-      async trips() {
-        const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u]));
-        return db.trips.map((t) => ({ ...t, username: un[t.user_id]?.username, full_name: un[t.user_id]?.full_name, sightings: db.sightings.filter((s) => s.trip_id === t.id) }))
-          .sort((a, b) => String(b.started_at).localeCompare(a.started_at));
-      },
-      async reviewTrip(tripId, status, note = '') { const db = demoDb(); const me = needAdmin(db); db.sightings.filter((s) => s.trip_id === tripId).forEach((s) => Object.assign(s, { review_status: status, review_note: note, reviewed_by: me.id, reviewed_at: new Date().toISOString() })); saveDemo(db); },
-      async accessRequests() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u])); return (db.access || []).map((r) => ({ ...r, username: un[r.user_id]?.username, full_name: un[r.user_id]?.full_name })).reverse(); },
-      async decideAccess(id, approve) { const db = demoDb(); const me = needAdmin(db); const r = db.access.find((x) => x.id === id); Object.assign(r, { status: approve ? 'approved' : 'declined', decided_by: me.id, decided_at: new Date().toISOString() }); if (approve) db.users.find((u) => u.id === r.user_id).role = r.requested_role; saveDemo(db); },
-      async feedback() { const db = demoDb(); needAdmin(db); return (db.feedback || []).slice().reverse(); },
-      async setFeedbackStatus(id, status) { const db = demoDb(); needAdmin(db); const f = (db.feedback || []).find((x) => x.id === id); if (f) f.status = status; saveDemo(db); },
-      async deleteTrip(id) { const db = demoDb(); needAdmin(db); db.trips = db.trips.filter((t) => t.id !== id); db.sightings = db.sightings.filter((s) => s.trip_id !== id); saveDemo(db); },
-      async auditLog() { const db = demoDb(); needAdmin(db); return (db.audit || []).slice().reverse(); },
-      async checklistEntries(region) {
-        const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
-        return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
-      },
-      async setChecklistEntry(region, speciesId, status) {
-        const db = demoDb(); needAdmin(db); db.clStatus ||= {}; db.clStatus[region] ||= {};
-        const list = new Set(db.checklists[region] || []); const s = db.species.find((x) => x.id === speciesId);
-        if (status) { list.add(speciesId); db.clStatus[region][speciesId] = status; if (s && !s.regions.includes(region)) s.regions.push(region); }
-        else { list.delete(speciesId); delete db.clStatus[region][speciesId]; if (s) s.regions = s.regions.filter((r) => r !== region); }
-        db.checklists[region] = [...list];
-        const me = demoMe(db); (db.audit ||= []).push({ id: Date.now(), at: new Date().toISOString(), actor: me?.id, actor_name: me?.username, tbl: 'checklist', action: status ? 'UPSERT' : 'DELETE', row_key: region + ':' + speciesId, new_row: status ? { status } : null, old_row: null });
-        saveDemo(db);
-      },
-      async copyChecklist(from, to) {
-        const entries = await this.checklistEntries(from);
-        for (const e of entries) await this.setChecklistEntry(to, e.species_id, e.status);
-        return entries.length;
-      },
-      async roadkill() { const db = demoDb(); needAdmin(db); const un = Object.fromEntries(db.users.map((u) => [u.id, u.username])); return { surveys: db.surveys.map((s) => ({ ...s, username: un[s.user_id] })), records: db.roadkill.map((s) => ({ ...s, username: un[s.user_id] })) }; },
-      async deleteRoadkill(id) { const db = demoDb(); needAdmin(db); db.roadkill = db.roadkill.filter((s) => s.id !== id); saveDemo(db); },
-      async deleteSurvey(id) { const db = demoDb(); needAdmin(db); db.surveys = db.surveys.filter((s) => s.id !== id); db.roadkill = db.roadkill.filter((s) => s.survey_id !== id); saveDemo(db); },
-    },
-    resetDemo() { localStorage.removeItem(DKEY); },
-  };
-
-  // pricing rule shared by both back-ends (the server repeats it in create-order):
-  //   exact (pack, region) price wins; a state falls back to the "*state" price.
   function quoteFrom(prices, items) {
     const lines = items.map(({ pack, region }) => {
       const isState = region.includes('-');
@@ -403,30 +101,125 @@
     });
     return { lines, total: lines.reduce((s, l) => s + l.paise, 0) };
   }
+  /** Works offline: nearest state / district / island centre from the region list (lat/lng in the regions table).
+   *  District and island are only suggested when they are close and inside the chosen state. */
+  function locateRegions(regions, lat, lng) {
+    const near = (list, maxKm) => { let best = null, bd = maxKm; for (const r of list) { if (r.lat == null) continue; const d = haversineKm([lat, lng], [+r.lat, +r.lng]); if (d < bd) { bd = d; best = r; } } return best; };
+    const country = near(regions.filter((r) => r.kind === 'country'), 3000);
+    const state = near(regions.filter((r) => r.kind === 'state' || r.kind === 'ut'), 700);
+    const inState = (r) => { let x = r; for (let i = 0; i < 5 && x; i++) { if (x.parent === state?.code) return true; x = regions.find((y) => y.code === x.parent); } return false; };
+    const district = state ? near(regions.filter((r) => r.kind === 'district' && inState(r)), 90) : null;
+    const island = state ? near(regions.filter((r) => r.kind === 'island' && inState(r)), 30) : null;
+    return { country: country?.code || null, state: state?.code || null, district: district?.code || null, island: island?.code || null };
+  }
+  /** Place name from OpenStreetMap (online only; never blocks recording) */
+  async function placeName(lat, lng) {
+    try {
+      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${lat}&lon=${lng}`, { signal: ctrl.signal, headers: { 'Accept-Language': 'en' } });
+      if (!r.ok) return '';
+      const j = await r.json(), a = j.address || {};
+      return [a.village || a.hamlet || a.suburb || a.town || a.city || a.locality || a.road, a.county || a.state_district].filter(Boolean).slice(0, 2).join(', ') || (j.display_name || '').split(',').slice(0, 2).join(',');
+    } catch { return ''; }
+  }
 
-  // ════════════════════════════════════════════════════════════════════
-  //  SUPABASE BACK-END
-  // ════════════════════════════════════════════════════════════════════
-  // PGRST202 = function missing, PGRST205/42P01 = table missing: the database is older than the app
-  const DB_UPDATE_MSG = 'The database needs the latest update: an admin should paste supabase/setup.sql into Supabase → SQL Editor and Run it (safe to re-run, keeps all data).';
+  // ───────── durable storage (localStorage + IndexedDB + Cache API) ─────────
+  function idb(store = 'kv') {
+    return new Promise((res) => {
+      try { const r = indexedDB.open('hw_durable', 2); r.onupgradeneeded = () => { for (const s of ['kv', 'photos']) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s); }; r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
+      catch { res(null); }
+    });
+  }
+  const idbPut = async (store, k, v) => { const db = await idb(); if (!db) return; await new Promise((ok) => { try { const tx = db.transaction(store, 'readwrite'); v == null ? tx.objectStore(store).delete(k) : tx.objectStore(store).put(v, k); tx.oncomplete = ok; tx.onerror = ok; } catch { ok(); } }); };
+  const idbGetv = async (store, k) => { const db = await idb(); if (!db) return null; return new Promise((res) => { try { const g = db.transaction(store).objectStore(store).get(k); g.onsuccess = () => res(g.result ?? null); g.onerror = () => res(null); } catch { res(null); } }); };
+  const cacheSet = async (k, v) => { try { const c = await caches.open('hw_durable'); const u = '/__hw_durable/' + encodeURIComponent(k); v == null ? await c.delete(u) : await c.put(u, new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } })); } catch {} };
+  const cacheGet = async (k) => { try { const r = await (await caches.open('hw_durable')).match('/__hw_durable/' + encodeURIComponent(k)); return r ? r.json() : null; } catch { return null; } };
+  function durSet(k, v) { v == null ? (() => { try { localStorage.removeItem(k); } catch {} })() : lsSet(k, v); idbPut('kv', k, v); cacheSet(k, v); }
+  async function durGet(k) {
+    let v = lsGet(k, null); if (v != null) return v;
+    v = await idbGetv('kv', k); if (v != null) { lsSet(k, v); return v; }
+    v = await cacheGet(k); if (v != null) { lsSet(k, v); idbPut('kv', k, v); return v; }
+    return null;
+  }
+  // photos taken offline live in IndexedDB until they are uploaded
+  const photoStore = { put: (id, blob) => idbPut('photos', id, blob), get: (id) => idbGetv('photos', id), del: (id) => idbPut('photos', id, null) };
+  const storageWorks = () => { try { localStorage.setItem('hw_ck', '1'); const ok = localStorage.getItem('hw_ck') === '1'; localStorage.removeItem('hw_ck'); return ok; } catch { return false; } };
+  try { navigator.storage?.persist?.(); } catch {}
+  const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isInAppBrowser = () => /WhatsApp|FBAN|FBAV|FB_IAB|Instagram|Line\/|Telegram|Snapchat/i.test(navigator.userAgent || '');
+
+  /** Shrink a camera photo to ≤1600 px JPEG and keep basic metadata */
+  async function processPhoto(file) {
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Unsupported image')); i.src = url; });
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    const blob = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.82));
+    return { blob, width: c.width, height: c.height, size_bytes: blob.size, taken_at: new Date(file.lastModified || Date.now()).toISOString(), original_name: file.name || '' };
+  }
+
+  // ───────── network truth + Supabase client ─────────
+  const _linkParams = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + (location.search || '').replace(/^\?/, ''));
+  let _recovery = _linkParams.get('type') === 'recovery';
+  const _linkError = _linkParams.get('error_description') || _linkParams.get('error') || '';
+  const net = { ok: true, at: 0 };
+  const setNet = (okNow) => { if (net.ok !== okNow) { net.ok = okNow; dispatchEvent(new CustomEvent('hw-net', { detail: okNow })); } net.at = Date.now(); };
+  const timedFetch = async (url, opts = {}) => {
+    const ctrl = new AbortController(), slow = /\/(functions|storage)\/v1\//.test(String(url)), t = setTimeout(() => ctrl.abort(), slow ? 45000 : 15000);
+    if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort());
+    try { const r = await fetch(url, { ...opts, signal: ctrl.signal }); setNet(true); return r; }
+    catch (e) { setNet(false); throw new Error(e.name === 'AbortError' ? 'No connection (request timed out)' : 'No connection'); }
+    finally { clearTimeout(t); }
+  };
+  const sb = CONFIGURED && window.supabase ? window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY, { global: { fetch: timedFetch } }) : null;
+  const isNetError = (e) => /no connection|failed to fetch|network|load failed|timed out|offline/i.test(String(e?.message || e));
+  const authListeners = new Set();
+  if (sb) sb.auth.onAuthStateChange((evt, session) => { if (evt === 'PASSWORD_RECOVERY') _recovery = true; authListeners.forEach((f) => { try { f(evt, session); } catch {} }); });
+
+  const DB_UPDATE_MSG = 'The database needs the latest update: the Admin should paste supabase/setup.sql into Supabase → SQL Editor and Run it (safe to re-run, keeps all data).';
   const isDbBehind = (error) => ['PGRST202', 'PGRST205', '42P01', '42883'].includes(error?.code) || /schema cache|does not exist/i.test(error?.message || '');
   const ok = ({ data, error }) => {
-    if (error) throw isDbBehind(error) ? Object.assign(new Error(DB_UPDATE_MSG), { code: 'db_update_needed' }) : new Error(error.message);
+    if (error) throw isDbBehind(error) ? codedError('db_update_needed', DB_UPDATE_MSG) : Object.assign(new Error(error.message), { code: error.code });
     return data;
   };
-  // DB rows use snake_case column names; the UI uses the seed's short names.
-  const fromRow = (r) => r && ({
-    id: r.id, pack: r.pack_id, common: r.common_name, sci: r.scientific_name, family: r.family, venom: r.venom, toxic: r.toxic,
-    iucn: r.iucn, endemic: r.endemic, sensitive: r.sensitive, size: r.size, habitat: r.habitat, distribution: r.distribution,
-    id_notes: r.id_notes, behaviour: r.behaviour, similar: r.similar_species, images: r.images || [], traits: r.traits || {}, regions: r.regions || [],
-  });
-  const toRow = (s) => ({
-    id: s.id, pack_id: s.pack, common_name: s.common, scientific_name: s.sci, family: s.family, venom: s.venom, toxic: s.toxic,
-    iucn: s.iucn, endemic: !!s.endemic, sensitive: !!s.sensitive, size: s.size, habitat: s.habitat, distribution: s.distribution,
-    id_notes: s.id_notes, behaviour: s.behaviour, similar_species: s.similar, images: s.images || [], traits: s.traits || {},
-  });
+  const need = () => { if (!sb) throw codedError('not_configured', 'This copy of HerpWatch is not connected to a database yet (config.js).'); };
+
+  function authError(error, email) {
+    const m = String(error?.message || error || ''), code = error?.code || error?.error_code || '';
+    if (/rate limit/i.test(m) || code === 'over_email_send_rate_limit' || error?.status === 429)
+      return codedError('email_rate_limit', 'Too many e-mails were sent in a short time. Supabase’s built-in mailer allows only a few per hour, so please wait and try again (the Admin can add an e-mail server in Supabase to remove this limit).');
+    if (/not authorized/i.test(m) || code === 'email_address_not_authorized')
+      return codedError('email_not_authorized', `Supabase’s built-in mailer only sends to the project team, so ${email || 'this address'} was refused. The Admin needs to set up SMTP in Supabase, or turn off "Confirm email".`);
+    if (/error sending|sending.*email|smtp/i.test(m)) return codedError('email_send_failed', 'Supabase could not send the e-mail. The Admin should check the e-mail (SMTP) settings in Supabase, or turn off "Confirm email".');
+    if (/signups? not allowed|signup.*disabled/i.test(m) || code === 'signup_disabled') return codedError('signup_disabled', 'New sign-ups are switched off.');
+    if (/expired|invalid.*(link|token)|otp/i.test(m)) return codedError('link_expired', 'This e-mail link has expired or was already used. Request a new one.');
+    if (/not confirmed/i.test(m)) return codedError('email_not_confirmed', `Please confirm your e-mail first: open the link we sent to ${email}.`);
+    if (/invalid login credentials/i.test(m)) return codedError('bad_credentials', 'Wrong e-mail or password. The same account works in the app and the dashboard; use "Reset password" if you forgot it.');
+    return Object.assign(new Error(m), { code });
+  }
+
+  // ───────── profile ─────────
   let _profile = null;
-  // field-record tables reference auth.users, so usernames are joined client-side from profiles
+  const redirectBase = () => location.href.split('#')[0].split('?')[0];
+  async function loadProfile() {
+    need();
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) return (_profile = null);
+    let p;
+    try { p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle()); }
+    catch (e) {
+      const cached = isNetError(e) ? await durGet('hw_profile_' + session.user.id) : null;
+      if (cached) return (_profile = { ...cached, offline: true });
+      throw e;
+    }
+    if (!p) { const { data } = await sb.rpc('ensure_profile'); p = data && data.id ? data : null; }
+    _profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, username: (session.user.email || '').split('@')[0], role: 'user', status: 'approved' };
+    durSet('hw_profile_' + session.user.id, _profile);
+    return _profile;
+  }
+  const me = async () => _profile || (await loadProfile());
   async function withUsernames(rows) {
     const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     if (!ids.length) return rows;
@@ -434,81 +227,65 @@
     const by = Object.fromEntries(profs.map((p) => [p.id, p]));
     return rows.map((r) => ({ ...r, username: by[r.user_id]?.username || '', full_name: by[r.user_id]?.full_name || '' }));
   }
-  async function loadProfile() {
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) return (_profile = null);
-    let p;
-    try { p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle()); }
-    catch (e) {
-      // offline: keep working with the last profile saved on this device
-      const cached = isNetError(e) ? await durGet('hw_profile_' + session.user.id) : null;
-      if (cached) return (_profile = { ...cached, offline: true });
-      throw e;
-    }
-    // one account for app + dashboard: if the profile row is missing (e.g. the user signed up
-    // before the database was set up), the server creates it from the sign-up details
-    if (!p) { const { data } = await sb.rpc('ensure_profile'); p = data && data.id ? data : null; }
-    _profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, username: (session.user.email || '').split('@')[0], role: 'user', status: 'approved' };
-    durSet('hw_profile_' + session.user.id, _profile);
-    return _profile;
-  }
-  const sbApi = {
-    mode: 'supabase',
+
+  // DB rows ↔ UI species objects
+  const fromRow = (r) => r && ({
+    id: r.id, pack: r.pack_id, common: r.common_name, sci: r.scientific_name, family: r.family || '', genus: r.genus || '', order: r.order_name || '', group: r.taxon_group || '',
+    authority: r.authority || '', refs: r.refs || '', venom: r.venom, toxic: r.toxic, iucn: r.iucn, endemic: r.endemic, sensitive: r.sensitive, size: r.size, habitat: r.habitat,
+    distribution: r.distribution, id_notes: r.id_notes, behaviour: r.behaviour, similar: r.similar_species, images: r.images || [], traits: r.traits || {}, regions: r.regions || [],
+  });
+  const toRow = (s) => ({
+    id: s.id, pack_id: s.pack, common_name: s.common, scientific_name: s.sci, family: s.family, genus: s.genus || (s.sci || '').split(' ')[0], order_name: s.order || '',
+    taxon_group: s.group || '', authority: s.authority || '', refs: s.refs || '', venom: s.venom, toxic: s.toxic, iucn: s.iucn, endemic: !!s.endemic, sensitive: !!s.sensitive,
+    size: s.size || '', habitat: s.habitat || '', distribution: s.distribution || '', id_notes: s.id_notes || '', behaviour: s.behaviour || '', similar_species: s.similar || '',
+    images: s.images || [], traits: s.traits || {},
+  });
+  // the observation columns the field app may write (review fields are server-controlled)
+  const OBS_COLS = ['id', 'trip_id', 'user_id', 'species_id', 'species_text', 'count', 'lat', 'lng', 'accuracy_m', 'elevation_m', 'observed_at', 'region_code', 'state_code',
+    'district_code', 'island_code', 'location_name', 'life_stage', 'sex', 'notes', 'photos', 'id_confidence', 'evidence', 'mortality', 'origin', 'habitat', 'microhabitat',
+    'behaviour', 'activity', 'weather', 'temperature_c', 'privacy'];
+  const SESSION_COLS = ['id', 'user_id', 'region_code', 'protocol', 'survey_type', 'title', 'status', 'started_at', 'ended_at', 'duration_min', 'paused_min', 'distance_km', 'observers',
+    'complete', 'track', 'lat', 'lng', 'start_accuracy_m', 'start_elevation_m', 'end_lat', 'end_lng', 'location_name', 'state_code', 'district_code', 'island_code', 'weather', 'notes'];
+  const pick = (o, cols) => Object.fromEntries(cols.filter((k) => o[k] !== undefined).map((k) => [k, o[k] === '' && /_code$/.test(k) ? null : o[k]]));
+  const PROTOCOL_OF = { night: 'night_walk', transect: 'traveling', road: 'traveling', habitat: 'area', creek_mangrove: 'traveling', stream_wetland: 'traveling', day: 'traveling', opportunistic: 'incidental' };
+
+  const api = {
+    configured: CONFIGURED,
+    // ── auth ──
     session: loadProfile,
     async signIn(email, password) {
+      need();
       if (!email.includes('@')) throw codedError('use_email', 'Sign in with your e-mail address (the same one for the app and the dashboard).');
       const { error } = await sb.auth.signInWithPassword({ email, password });
-      if (error) {
-        if (/not confirmed/i.test(error.message)) throw codedError('email_not_confirmed', `Please confirm your e-mail first: open the link we sent to ${email}.`);
-        if (/invalid login credentials/i.test(error.message)) throw codedError('bad_credentials', 'Wrong e-mail or password. The same account works in the app and the dashboard; use "Reset password" if you forgot it.');
-        throw authError(error, email);
-      }
+      if (error) throw authError(error, email);
       const p = await loadProfile();
-      if (p?.status === 'blocked') { await sb.auth.signOut(); throw new Error('This account is blocked. Contact the administrator.'); }
+      if (p?.status === 'blocked') { await sb.auth.signOut(); throw new Error('This account is suspended. Contact the administrator.'); }
       return p;
     },
     async signUp(f) {
+      need();
       const { data, error } = await sb.auth.signUp({ email: f.email, password: f.password,
-        options: { emailRedirectTo: location.href.split('#')[0].split('?')[0], data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, requested_role: f.requested_role || '' } } });
+        options: { emailRedirectTo: redirectBase(), data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, requested_role: f.requested_role === 'reviewer' ? 'reviewer' : '' } } });
       if (error) {
         if (/already registered|already exists/i.test(error.message)) throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
         throw authError(error, f.email);
       }
-      // Supabase hides existing e-mails by returning a user with no identities
       if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
         throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
-      return loadProfile();   // null when e-mail confirmation is required
+      return loadProfile();
     },
-    // ── dashboard access ──
-    async hasAdmin() { const { data, error } = await sb.rpc('has_admin'); if (error) return isDbBehind(error) ? null : true; return !!data; },   // null = database not updated yet
-    async claimFirstAdmin() { ok(await sb.rpc('claim_first_admin')); return loadProfile(); },
-    async requestAccess(role, note = '') { return ok(await sb.rpc('request_access', { p_role: role, p_note: note })); },
-    async myAccessRequest() { const me = _profile || (await loadProfile()); const { data, error } = await sb.from('access_requests').select('*').eq('user_id', me.id).order('created_at', { ascending: false }).limit(1).maybeSingle(); if (error) return null; return data; },
-    async submitFeedback(f) {
-      const { data: { session } } = await sb.auth.getSession();
-      ok(await sb.from('feedback').insert({ ...f, user_id: session?.user?.id || null }));
-    },
-    async resendConfirmation(email) { const { error } = await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: location.href.split('#')[0].split('?')[0] } }); if (error) throw authError(error, email); },
-    async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
-    /** Live catalogue updates (admin edits a checklist / species / price) via Supabase Realtime. */
-    onCatalogChange(cb) {
-      const ch = sb.channel('hw-catalog')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'checklist' }, (e) => cb('checklist', e))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'species' }, (e) => cb('species', e))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_prices' }, (e) => cb('prices', e))
-        .subscribe();
-      return () => sb.removeChannel(ch);
-    },
+    async signInWithGoogle(redirectTo) { need(); ok(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo || redirectBase() } })); },
     async resetPassword(email) {
+      need();
       if (!String(email).includes('@')) throw codedError('use_email', 'Enter the e-mail address of your account.');
-      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0].split('?')[0] });
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: redirectBase() });
       if (error) throw authError(error, email);
     },
-    /** true when the page was opened from a "reset password" e-mail */
+    async resendConfirmation(email) { need(); const { error } = await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: redirectBase() } }); if (error) throw authError(error, email); },
     isRecovery: () => _recovery,
-    /** message when an e-mail link was expired/invalid ('' otherwise) */
     linkError: () => (_linkError ? authError({ message: _linkError }).message : ''),
     async updatePassword(password) {
+      need();
       if (!password || password.length < 6) throw codedError('weak_password', 'Use at least 6 characters.');
       const { error } = await sb.auth.updateUser({ password });
       if (error) throw authError(error);
@@ -517,140 +294,188 @@
       return loadProfile();
     },
     onAuth(cb) { authListeners.add(cb); return () => authListeners.delete(cb); },
-    async signOut() { await sb.auth.signOut(); _profile = null; },
-    async signInWithGoogle(redirectTo) { ok(await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo || location.href.split('#')[0] } })); },
-    async updateProfile(p) { const me = await loadProfile(); ok(await sb.from('profiles').update(p).eq('id', me.id)); return loadProfile(); },
-    async packs() { return ok(await sb.from('packs').select('*').order('sort')); },
-    async regions() { return ok(await sb.from('regions').select('*').order('code')); },
-    async prices() { return ok(await sb.from('pack_prices').select('id,pack:pack_id,region:region_code,paise,days,active').eq('active', true)); },
-    async speciesIndex() { return ok(await sb.from('species_index').select('*')).map(fromRow); },
-    async speciesFull(id) { return fromRow(ok(await sb.from('species_full').select('*').eq('id', id).maybeSingle())); },  // RLS: null if not entitled
-    async unlockedSpecies() { return ok(await sb.from('species_full').select('*')).map(fromRow); },
-    async checklist(region) { return ok(await sb.from('checklist').select('species_id').eq('region_code', region)).map((r) => r.species_id); },
-    async myEntitlements() { return ok(await sb.from('entitlements').select('id,pack:pack_id,region:region_code,valid_until,source').or('valid_until.is.null,valid_until.gt.' + new Date().toISOString())); },
-    async quote(items) { return quoteFrom(await sbApi.prices(), items); },
+    async signOut() { if (sb) await sb.auth.signOut(); _profile = null; },
+    async updateProfile(patch) { const m = await me(); ok(await sb.from('profiles').update(pick(patch, ['full_name', 'phone', 'home_region'])).eq('id', m.id)); _profile = null; return loadProfile(); },
+
+    // ── access (Admin = platform owner only) ──
+    async hasAdmin() { need(); const { data, error } = await sb.rpc('has_admin'); if (error) return isDbBehind(error) ? null : true; return !!data; },
+    async requestAccess(note = '') { need(); return ok(await sb.rpc('request_access', { p_role: 'reviewer', p_note: note })); },
+    async myAccessRequest() { need(); const m = await me(); const { data, error } = await sb.from('access_requests').select('*').eq('user_id', m.id).order('created_at', { ascending: false }).limit(1).maybeSingle(); return error ? null : data; },
+
+    // ── catalogue ──
+    async packs() { need(); return ok(await sb.from('packs').select('*').order('sort')); },
+    async regions() { need(); return ok(await sb.from('regions').select('*').order('sort').order('code')); },
+    async prices() { need(); return ok(await sb.from('pack_prices').select('id,pack:pack_id,region:region_code,paise,days,active').eq('active', true)); },
+    async settings() { need(); const rows = ok(await sb.from('platform_settings').select('key,value')); return Object.fromEntries(rows.map((r) => [r.key, r.value])); },
+    async speciesIndex() { need(); return ok(await sb.from('species_index').select('*')).map(fromRow); },
+    async speciesFull(id) { need(); return fromRow(ok(await sb.from('species_full').select('*').eq('id', id).maybeSingle())); },
+    async unlockedSpecies() { need(); return ok(await sb.from('species_full').select('*')).map(fromRow); },
+    async checklist(region) { need(); return ok(await sb.from('checklist').select('species_id').eq('region_code', region)).map((r) => r.species_id); },
+    async checklistEntries(region) { need(); return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
+    async myEntitlements() { need(); return ok(await sb.from('entitlements').select('id,pack:pack_id,region:region_code,valid_until,source').or('valid_until.is.null,valid_until.gt.' + new Date().toISOString())); },
+    onCatalogChange(cb) {
+      if (!sb) return () => {};
+      const ch = sb.channel('hw-catalog')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'checklist' }, (e) => cb('checklist', e))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'species' }, (e) => cb('species', e))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_prices' }, (e) => cb('prices', e))
+        .subscribe();
+      return () => sb.removeChannel(ch);
+    },
     async checkout(items) {
+      need();
       const { data, error } = await sb.functions.invoke('create-order', { body: { items } });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(/not found|404/i.test(error.message) ? 'Payments are not switched on yet.' : error.message);
       if (!window.Razorpay) throw new Error('Payment library not loaded — check your connection.');
-      const me = _profile || (await loadProfile());
+      const m = await me();
       return new Promise((resolve, reject) => {
-        const rz = new window.Razorpay({
-          key: data.key_id || C.RAZORPAY_KEY_ID, order_id: data.order_id, amount: data.amount, currency: 'INR',
-          name: C.APP_NAME, description: data.description, prefill: { email: me.email, contact: me.phone || '' },
-          notes: { user_id: me.id }, theme: { color: '#2f7d4f' },
-          // the licence is written by the webhook, so poll briefly for it to land
-          handler: async () => { for (let i = 0; i < 10; i++) { const e = await sbApi.myEntitlements(); if (e.length) break; await new Promise((r) => setTimeout(r, 1500)); } resolve({ ok: true }); },
+        new window.Razorpay({
+          key: data.key_id || C.RAZORPAY_KEY_ID, order_id: data.order_id, amount: data.amount, currency: 'INR', name: C.APP_NAME, description: data.description,
+          prefill: { email: m.email, contact: m.phone || '' }, notes: { user_id: m.id }, theme: { color: '#2f7d4f' },
+          handler: async () => { for (let i = 0; i < 10; i++) { if ((await api.myEntitlements()).length) break; await new Promise((r) => setTimeout(r, 1500)); } resolve({ ok: true }); },
           modal: { ondismiss: () => reject(new Error('Payment cancelled')) },
-        });
-        rz.open();
+        }).open();
       });
     },
-    async saveTrip(trip) {
-      const { sightings, ...t } = trip; const me = _profile || (await loadProfile());
-      ok(await sb.from('trips').upsert({ ...t, user_id: me.id }));
-      ok(await sb.from('sightings').delete().eq('trip_id', t.id));
-      if (sightings.length) ok(await sb.from('sightings').insert(sightings.map((s) => ({ ...s, trip_id: t.id, user_id: me.id }))));
+
+    // ── field data (the field app queues these and replays them when online) ──
+    async uploadPhoto(blob, path) {
+      need();
+      const { error } = await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+      if (error && !/exists|duplicate/i.test(error.message)) throw new Error(error.message);
+      return sb.storage.from('photos').getPublicUrl(path).data.publicUrl;
+    },
+    /** session + its observations + track points + photo rows; idempotent */
+    async saveSession({ session, observations = [], removed = [], points = [], photos = [] }) {
+      need(); const m = await me();
+      const s = pick({ ...session, user_id: m.id, protocol: PROTOCOL_OF[session.survey_type] || 'incidental' }, SESSION_COLS);
+      ok(await sb.from('trips').upsert(s));
+      if (removed.length) ok(await sb.from('sightings').delete().in('id', removed).eq('user_id', m.id));
+      if (observations.length) ok(await sb.from('sightings').upsert(observations.map((o) => pick({ ...o, trip_id: session.id, user_id: m.id }, OBS_COLS))));
+      for (let i = 0; i < points.length; i += 500)
+        ok(await sb.from('track_points').upsert(points.slice(i, i + 500).map((p) => ({ ...p, session_id: session.id, user_id: m.id })), { onConflict: 'session_id,t', ignoreDuplicates: true }));
+      if (photos.length) ok(await sb.from('photos').upsert(photos.map((p) => ({ ...p, user_id: m.id }))));
       return true;
     },
-    async saveRoadkill(survey) {
-      const { records, ...sv } = survey; const me = _profile || (await loadProfile());
-      ok(await sb.from('roadkill_surveys').upsert({ ...sv, user_id: me.id }));
-      ok(await sb.from('roadkill_records').delete().eq('survey_id', sv.id));
-      if (records.length) ok(await sb.from('roadkill_records').insert(records.map((r) => ({ ...r, survey_id: sv.id, user_id: me.id }))));
+    async saveObservation({ observation, photos = [] }) {
+      need(); const m = await me();
+      ok(await sb.from('sightings').upsert(pick({ ...observation, user_id: m.id }, OBS_COLS)));
+      if (photos.length) ok(await sb.from('photos').upsert(photos.map((p) => ({ ...p, user_id: m.id }))));
       return true;
     },
-    async myTrips() { const me = _profile || (await loadProfile()); return ok(await sb.from('trips').select('*, sightings(*)').eq('user_id', me.id).order('started_at', { ascending: false })); },
-    async mySurveys() { const me = _profile || (await loadProfile()); return ok(await sb.from('roadkill_surveys').select('*, records:roadkill_records(*)').eq('user_id', me.id).order('started_at', { ascending: false })); },
-    async publicStats() { return ok(await sb.rpc('public_stats')); },
-    async publicPoints() { return ok(await sb.rpc('public_points')); },
-    async publicTracks() { return ok(await sb.rpc('public_tracks')); },
+    async deleteObservation(id) { need(); ok(await sb.from('sightings').delete().eq('id', id)); },
+    async deleteSession(id) { need(); ok(await sb.from('trips').delete().eq('id', id)); },
+    async mySessions() { need(); const m = await me(); return ok(await sb.from('trips').select('*').eq('user_id', m.id).order('started_at', { ascending: false }).limit(1000)); },
+    async myObservations() {
+      need(); const m = await me();
+      return ok(await sb.from('sightings').select('*, photo_rows:photos(*), reviews:observation_reviews(*)').eq('user_id', m.id).order('observed_at', { ascending: false }).limit(10000));
+    },
+    async sessionTrack(id) { need(); return ok(await sb.from('track_points').select('t,lat,lng,accuracy_m,elevation_m').eq('session_id', id).order('t')); },
+    async commentOnObservation(id, text) { need(); return ok(await sb.rpc('review_observation', { p_sighting: id, p_action: 'comment', p_species: null, p_comment: text, p_duplicate_of: null })); },
+    async submitFeedback(f) { need(); const { data: { session } } = await sb.auth.getSession(); ok(await sb.from('feedback').insert({ ...f, user_id: session?.user?.id || null })); },
+
+    // ── public (website / Explore) ──
+    async publicStats() { need(); return ok(await sb.rpc('public_stats')); },
+    async publicPoints() { need(); return ok(await sb.rpc('public_points')); },
+    async publicTracks() { need(); return ok(await sb.rpc('public_tracks')); },
+    async leaderboard(f = {}) { need(); return ok(await sb.rpc('public_leaderboard', { p_region: f.region || null, p_from: f.from || null, p_group: f.group || null, p_limit: f.limit || 50 })); },
+    async publicObservations(f = {}) {
+      need();
+      return ok(await sb.rpc('public_observations', { p_species: f.species || null, p_family: f.family || null, p_from: f.from || null, p_to: f.to || null, p_region: f.region || null, p_status: f.status || null, p_limit: f.limit || 3000 }));
+    },
+
+    // ── reviewer & admin (dashboard) ──
     admin: {
-      async allSpecies() { return ok(await sb.from('species_full').select('*').order('pack_id')).map(fromRow); },
-      async upsertSpecies(s) { ok(await sb.from('species').upsert(toRow(s))); return s; },
-      async deleteSpecies(id) { ok(await sb.from('species').delete().eq('id', id)); },
-      async setChecklist(region, ids) { ok(await sb.rpc('set_checklist', { p_region: region, p_species: ids })); },
-      async upsertPrice(p) { ok(await sb.from('pack_prices').upsert({ ...(p.id ? { id: p.id } : {}), pack_id: p.pack, region_code: p.region, paise: p.paise, days: p.days, active: p.active !== false })); },
-      async deletePrice(id) { ok(await sb.from('pack_prices').delete().eq('id', id)); },
-      async users() {
-        const users = ok(await sb.from('profiles').select('*').order('created_at', { ascending: false }));
-        const ents = ok(await sb.from('entitlements').select('id,user_id,pack:pack_id,region:region_code,valid_until,source').or('valid_until.is.null,valid_until.gt.' + new Date().toISOString()));
-        return users.map((u) => ({ ...u, packs: ents.filter((e) => e.user_id === u.id) }));
-      },
-      async setUser(id, patch) { ok(await sb.from('profiles').update(patch).eq('id', id)); },
-      async grant(user_id, pack, region, days) { ok(await sb.rpc('grant_pack', { p_user: user_id, p_pack: pack, p_region: region, p_days: days || null })); },
-      async revoke(entId) { ok(await sb.from('entitlements').update({ valid_until: new Date().toISOString() }).eq('id', entId)); },
-      async sightings() { return withUsernames(ok(await sb.from('sightings').select('*').order('observed_at', { ascending: false }).limit(5000))); },
-      async review(id, status, note = '') { ok(await sb.from('sightings').update({ review_status: status, review_note: note || '' }).eq('id', id)); },
-      async reviewTrip(tripId, status, note = '') { ok(await sb.from('sightings').update({ review_status: status, review_note: note || '' }).eq('trip_id', tripId)); },
-      async accessRequests() { return withUsernames(ok(await sb.from('access_requests').select('*').order('created_at', { ascending: false }).limit(200))); },
-      async decideAccess(id, approve) { ok(await sb.rpc('decide_access', { p_id: id, p_approve: !!approve })); },
-      async feedback() { return ok(await sb.from('feedback').select('*').order('created_at', { ascending: false }).limit(1000)); },
-      async setFeedbackStatus(id, status) { ok(await sb.from('feedback').update({ status }).eq('id', id)); },
-      async deleteSighting(id) { ok(await sb.from('sightings').delete().eq('id', id)); },
-      async deleteTrip(id) { ok(await sb.from('trips').delete().eq('id', id)); },
-      async trips() { return withUsernames(ok(await sb.from('trips').select('*, sightings(*)').order('started_at', { ascending: false }).limit(2000))); },
-      async roadkill() {
-        const surveys = ok(await sb.from('roadkill_surveys').select('*').order('started_at', { ascending: false }));
-        const records = ok(await sb.from('roadkill_records').select('*').order('observed_at', { ascending: false }));
-        return { surveys: await withUsernames(surveys), records: await withUsernames(records) };
-      },
-      async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
-      async auditLog(limit = 300) { return ok(await sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit)); },
+      async allSpecies() { need(); return ok(await sb.from('species_full').select('*').order('pack_id')).map(fromRow); },
+      async upsertSpecies(s) { need(); ok(await sb.from('species').upsert(toRow(s))); return s; },
+      async annotateSpecies(id, patch) { need(); ok(await sb.from('species').update(pick(patch, ['distribution', 'habitat', 'endemic', 'iucn', 'sensitive', 'images', 'refs', 'id_notes', 'behaviour', 'similar_species'])).eq('id', id)); },
+      async deleteSpecies(id) { need(); ok(await sb.from('species').delete().eq('id', id)); },
+      async checklistEntries(region) { need(); return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
       async setChecklistEntry(region, speciesId, status) {
+        need();
         if (!status) ok(await sb.from('checklist').delete().eq('region_code', region).eq('species_id', speciesId));
         else ok(await sb.from('checklist').upsert({ region_code: region, species_id: speciesId, status }));
       },
       async copyChecklist(from, to) {
+        need();
         const rows = ok(await sb.from('checklist').select('species_id,status').eq('region_code', from));
         if (rows.length) ok(await sb.from('checklist').upsert(rows.map((r) => ({ ...r, region_code: to }))));
         return rows.length;
       },
-      async deleteRoadkill(id) { ok(await sb.from('roadkill_records').delete().eq('id', id)); },
-      async deleteSurvey(id) { ok(await sb.from('roadkill_surveys').delete().eq('id', id)); },
+      async upsertRegion(r) { need(); ok(await sb.from('regions').upsert(pick(r, ['code', 'name', 'parent', 'kind', 'lat', 'lng', 'sort']))); },
+      async deleteRegion(code) { need(); ok(await sb.from('regions').delete().eq('code', code)); },
+      async auditLog(limit = 500) { need(); return ok(await sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit)); },
+      async upsertPrice(p) { need(); ok(await sb.from('pack_prices').upsert({ ...(p.id ? { id: p.id } : {}), pack_id: p.pack, region_code: p.region, paise: p.paise, days: p.days, active: p.active !== false })); },
+      async deletePrice(id) { need(); ok(await sb.from('pack_prices').delete().eq('id', id)); },
+      async users() {
+        need();
+        const users = ok(await sb.from('profiles').select('*').order('created_at', { ascending: false }));
+        const ents = ok(await sb.from('entitlements').select('id,user_id,pack:pack_id,region:region_code,valid_until,source').or('valid_until.is.null,valid_until.gt.' + new Date().toISOString()));
+        const owner = ok(await sb.from('platform_owner').select('user_id')).map((r) => r.user_id)[0];
+        return users.map((u) => ({ ...u, is_owner: u.id === owner, packs: ents.filter((e) => e.user_id === u.id) }));
+      },
+      async setUser(id, patch) { need(); ok(await sb.from('profiles').update(pick(patch, ['role', 'status', 'full_name', 'phone', 'home_region'])).eq('id', id)); },
+      async grant(user_id, pack, region, days) { need(); ok(await sb.rpc('grant_pack', { p_user: user_id, p_pack: pack, p_region: region, p_days: days || null })); },
+      async revoke(entId) { need(); ok(await sb.from('entitlements').update({ valid_until: new Date().toISOString() }).eq('id', entId)); },
+      async trips() { need(); return withUsernames(ok(await sb.from('trips').select('*, sightings(*)').order('started_at', { ascending: false }).limit(3000))); },
+      async sightings() { need(); return withUsernames(ok(await sb.from('sightings').select('*, photo_rows:photos(*), reviews:observation_reviews(*)').order('observed_at', { ascending: false }).limit(10000))); },
+      /** action: verify | reject | needs_id | more_info | suggest_id | reidentify | duplicate | comment | reopen */
+      async reviewObservation(id, action, speciesId = null, comment = '', duplicateOf = null) {
+        need(); return ok(await sb.rpc('review_observation', { p_sighting: id, p_action: action, p_species: speciesId, p_comment: comment, p_duplicate_of: duplicateOf }));
+      },
+      async review(id, status, note = '') { const action = { verified: 'verify', rejected: 'reject', needs_id: 'needs_id', more_info: 'more_info', pending: 'reopen' }[status] || status; return api.admin.reviewObservation(id, action, null, note); },
+      async reviewTrip(tripId, status, note = '') {
+        need(); const ids = ok(await sb.from('sightings').select('id,review_status').eq('trip_id', tripId));
+        for (const s of ids) if (s.review_status !== status) await api.admin.review(s.id, status, note);
+      },
+      async deleteSighting(id) { need(); ok(await sb.from('sightings').delete().eq('id', id)); },
+      async deleteTrip(id) { need(); ok(await sb.from('trips').delete().eq('id', id)); },
+      /** road-kill: legacy logger tables + road-survey sessions with road-kill observations */
+      async roadkill() {
+        need();
+        const [ls, lr, ts, tr] = await Promise.all([
+          sb.from('roadkill_surveys').select('*').order('started_at', { ascending: false }),
+          sb.from('roadkill_records').select('*').order('observed_at', { ascending: false }),
+          sb.from('trips').select('*').eq('survey_type', 'road').order('started_at', { ascending: false }),
+          sb.from('sightings').select('*').eq('mortality', 'roadkill').order('observed_at', { ascending: false }),
+        ].map(async (p) => ok(await p)));
+        const spPack = Object.fromEntries((await api.speciesIndex()).map((s) => [s.id, s.pack]));
+        const surveys = [...ls, ...ts.map((t) => ({ id: t.id, user_id: t.user_id, region_code: t.region_code, mode: 'session', road_name: t.title || t.location_name || 'Road survey', road_type: '', started_at: t.started_at, ended_at: t.ended_at, distance_km: +t.distance_km || 0, track: t.track || [], notes: t.notes }))];
+        const records = [...lr, ...tr.map((s) => ({ id: s.id, survey_id: s.trip_id, user_id: s.user_id, species_id: s.species_id, species_text: s.species_text, pack: spPack[s.species_id] || 'snakes', count: s.count, lat: s.lat, lng: s.lng, observed_at: s.observed_at, condition: s.notes ? 'see notes' : '', side: '', notes: s.notes, photos: s.photos || [], region_code: s.region_code }))];
+        return { surveys: await withUsernames(surveys), records: await withUsernames(records) };
+      },
+      async deleteRoadkill(id) { need(); const r = await sb.from('roadkill_records').delete().eq('id', id).select('id'); if (!r.data?.length) ok(await sb.from('sightings').delete().eq('id', id)); },
+      async deleteSurvey(id) { need(); const r = await sb.from('roadkill_surveys').delete().eq('id', id).select('id'); if (!r.data?.length) ok(await sb.from('trips').delete().eq('id', id)); },
+      async feedback() { need(); return ok(await sb.from('feedback').select('*').order('created_at', { ascending: false }).limit(1000)); },
+      async setFeedbackStatus(id, status) { need(); ok(await sb.from('feedback').update({ status }).eq('id', id)); },
+      async accessRequests() { need(); return withUsernames(ok(await sb.from('access_requests').select('*').order('created_at', { ascending: false }).limit(200))); },
+      async decideAccess(id, approve) { need(); ok(await sb.rpc('decide_access', { p_id: id, p_approve: !!approve })); },
+      // reviewer proposals → Admin approval
+      async submissions() { need(); return withUsernames((ok(await sb.from('reviewer_submissions').select('*').order('created_at', { ascending: false }).limit(500))).map((r) => ({ ...r, user_id: r.submitted_by }))); },
+      async submit(kind, { region = null, species = null, payload = {}, note = '', refs = '' } = {}) {
+        need(); const m = await me();
+        return ok(await sb.from('reviewer_submissions').insert({ submitted_by: m.id, kind, region_code: region, species_id: species, payload, note, refs }).select().single());
+      },
+      async decideSubmission(id, approve, note = '') { need(); return ok(await sb.rpc('decide_submission', { p_id: id, p_approve: !!approve, p_note: note })); },
+      async setSetting(key, value) { need(); ok(await sb.from('platform_settings').upsert({ key, value, updated_at: new Date().toISOString() })); },
+      /** complete platform export (Admin): every table the Admin can read */
+      async exportAll() {
+        need();
+        const tables = ['profiles', 'regions', 'species', 'checklist', 'trips', 'sightings', 'photos', 'observation_reviews', 'track_points', 'reviewer_submissions', 'roadkill_surveys', 'roadkill_records', 'feedback', 'access_requests', 'audit_log', 'platform_settings', 'pack_prices', 'entitlements'];
+        const out = {};
+        for (const t of tables) {
+          const rows = []; let from = 0;
+          for (;;) { const r = ok(await sb.from(t).select('*').range(from, from + 999)); rows.push(...r); if (r.length < 1000) break; from += 1000; }
+          out[t] = rows;
+        }
+        return out;
+      },
     },
   };
 
-  // ───────── photo helper: shrink to ≤1280px JPEG data URL (demo) / upload to storage (supabase) ─────────
-  async function processPhoto(file) {
-    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
-    const k = Math.min(1, 1280 / Math.max(img.width, img.height));
-    const c = document.createElement('canvas'); c.width = img.width * k; c.height = img.height * k;
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    const dataUrl = c.toDataURL('image/jpeg', 0.8);
-    if (DEMO) return dataUrl;
-    const blob = await (await fetch(dataUrl)).blob();
-    const me = _profile || (await loadProfile());
-    const path = `${me.id}/${uid()}.jpg`;
-    ok(await sb.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg' }));
-    return sb.storage.from('photos').getPublicUrl(path).data.publicUrl;
-  }
-
-  function toCSV(rows) {
-    if (!rows.length) return '';
-    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((k) => typeof rows.find((r) => r[k] != null)?.[k] !== 'object');
-    const q = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
-    return [cols.join(','), ...rows.map((r) => cols.map((c) => q(r[c])).join(','))].join('\n');
-  }
-  function download(name, text, type = 'text/csv') {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  }
-  // Small inline-SVG silhouette used when a species has no photo yet
-  function silhouette(pack, color = '#2f7d4f') {
-    const paths = {
-      snakes: 'M10 60 C25 30 40 85 55 55 S80 25 90 45 l6 -3 -2 7 -6 -1 C78 35 62 80 50 70 S25 45 10 60z',
-      lizards: 'M12 52 l22 -6 6 -10 4 8 18 -2 6 -9 3 9 14 2 10 -4 -8 8 -16 2 -6 8 -3 -8 -18 1 -5 9 -3 -9 -24 4z',
-      frogs: 'M50 30 c14 0 24 10 24 22 0 6 4 8 10 12 l-8 4 -8 -6 c-4 4 -10 6 -18 6 s-14 -2 -18 -6 l-8 6 -8 -4 c6 -4 10 -6 10 -12 0 -12 10 -22 24 -22z',
-      turtles: 'M50 34 c18 0 30 10 30 22 l8 2 -8 4 -4 8 -6 -6 H40 l-6 6 -4 -8 -10 -2 8 -4 c0 -12 4 -22 22 -22z',
-    };
-    return `<svg viewBox="0 0 100 100" role="img" aria-label="${esc(pack)} silhouette"><path d="${paths[pack] || paths.snakes}" fill="${color}" opacity=".85"/></svg>`;
-  }
-
   window.HW = {
-    C, SEED, DEMO, sb, IUCN, VENOM, TOXIC, CENTROIDS,
-    api: DEMO ? demoApi : sbApi,
-    net, isNetError,
-    util: { durSet, durGet, storageWorks, isStandalone, isInAppBrowser, uid, esc, rupees, lsGet, lsSet, haversineKm, trackKm, nearestRegion, coarsen, computeStats, quoteFrom, processPhoto, toCSV, download, silhouette },
+    C, SEED, DEMO: false, CONFIGURED, sb, net, isNetError, IUCN, VENOM, TOXIC, SURVEY_TYPES, STATUSES, EVIDENCE, LIFE_STAGES, SEXES, HABITATS, MICROHABITATS, BEHAVIOURS, GROUPS, GROUP_CLASS,
+    api,
+    util: { durSet, durGet, photoStore, storageWorks, isStandalone, isInAppBrowser, uid, esc, rupees, lsGet, lsSet, haversineKm, trackKm, quoteFrom, locateRegions, placeName, processPhoto, toCSV, download, downloadXlsx, printReport },
   };
 })();

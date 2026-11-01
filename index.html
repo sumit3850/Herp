@@ -63,7 +63,6 @@ footer{border-top:1px solid var(--line);padding:26px 0;color:var(--ink-soft);fon
 </style>
 </head>
 <body>
-<div id="demo" class="demo-banner hidden">Demo mode — the report below uses generated sample records.</div>
 <nav class="site"><div class="wrapw"><a class="logo" href="#"><img src="assets/icon.svg" alt=""><span id="logo">HerpWatch</span></a><span class="grow"></span>
   <a class="l hide-sm" href="#features">Features</a><a class="l hide-sm" href="#packs">Packs</a><a class="l hide-sm" href="#report">Live report</a><a class="l hide-sm" href="dashboard/">Dashboard</a>
   <button class="btn btn-ghost btn-sm" data-install><span data-ic="download"></span><span class="hide-xs">Install app</span></button>
@@ -227,7 +226,6 @@ async function map() {
   const C = HW.C; document.title = C.APP_NAME; $('logo').textContent = C.APP_NAME; $('ptitle').textContent = C.APP_NAME + ': data report';
   $('pdate').textContent = 'Generated ' + new Date().toLocaleString('en-IN');
   $('foot').textContent = `© ${new Date().getFullYear()} ${C.APP_NAME} · Contact ${C.SUPPORT_EMAIL}`;
-  if (HW.DEMO) $('demo').classList.remove('hidden');
   document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = HWI(el.dataset.ic)));
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   [packs, regions] = await Promise.all([api.packs(), api.regions()]);

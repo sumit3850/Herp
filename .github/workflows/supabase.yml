@@ -3,7 +3,7 @@ name: Supabase setup (database + backend)
 # Creates/updates the whole HerpWatch back end in the Supabase project:
 #   • database: tables, row-level security, views, RPCs, storage buckets (supabase/schema.sql)
 #   • catalogue: regions, packs, prices, species, core checklists       (supabase/seed.sql)
-#   • optional: promote an account to admin
+#   • optional: make an account the platform owner (sole Admin)
 #   • optional: deploy the payment Edge Functions (create-order, razorpay-webhook)
 #
 # Repository secrets (Settings → Secrets and variables → Actions → New repository secret):
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       admin_email:
-        description: "Make this account an admin (sign up in the app first)"
+        description: "Make this account the platform owner, the only Admin (sign up in the app first)"
         required: false
         default: ""
       deploy_functions:
@@ -55,21 +55,14 @@ jobs:
         run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/seed.sql
       - name: Accounts (one login for app + dashboard) and realtime
         run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/accounts-live.sql
-      - name: Promote admin
+      - name: Set the platform owner (the only Admin)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.admin_email != '' }}
         env:
           ADMIN_EMAIL: ${{ inputs.admin_email }}
         run: |
-          n=$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -t -A -v email="$ADMIN_EMAIL" <<'SQL'
-          with u as (
-            update public.profiles set role = 'admin', status = 'approved'
-            where id in (select id from auth.users where lower(email) = lower(:'email'))
-            returning 1)
-          select count(*) from u;
-          SQL
-          )
-          if [ "$n" = "0" ]; then echo "::error title=No such account::No account with that e-mail yet. Sign up in the app first, then run this again."; exit 1; fi
-          echo "::notice title=Admin::$ADMIN_EMAIL is now an admin"
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -t -A -v email="$ADMIN_EMAIL" -c "select public.set_platform_owner(:'email')" \
+            || { echo "::error title=Could not set owner::Sign up in the app with that e-mail first, then run this again."; exit 1; }
+          echo "::notice title=Admin::$ADMIN_EMAIL is the platform owner (sole Admin)"
       - name: Self-test (simulated users; all test data is rolled back)
         run: |
           out=$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -t -A -F '|' -f supabase/tests/selftest.sql | grep '|')

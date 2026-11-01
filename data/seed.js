@@ -34,6 +34,15 @@
     { pack: 'turtles', region: '*state', paise: 3900, days: 365 },
   ];
 
+  // approximate centre points (GPS → region hints when offline)
+  const CENTRES = {
+    'IN-AN': [11.7, 92.7], 'IN-AP': [15.9, 79.7], 'IN-AR': [28.2, 94.7], 'IN-AS': [26.2, 92.9], 'IN-BR': [25.9, 85.3], 'IN-CH': [30.73, 76.78], 'IN-CT': [21.3, 81.9],
+    'IN-DH': [20.4, 73.0], 'IN-DL': [28.6, 77.2], 'IN-GA': [15.4, 74.0], 'IN-GJ': [22.3, 71.2], 'IN-HR': [29.1, 76.1], 'IN-HP': [31.9, 77.2], 'IN-JK': [33.8, 75.0],
+    'IN-JH': [23.6, 85.3], 'IN-KA': [14.6, 75.9], 'IN-KL': [10.3, 76.4], 'IN-LA': [34.2, 77.6], 'IN-LD': [10.6, 72.6], 'IN-MP': [23.5, 78.6], 'IN-MH': [19.5, 75.7],
+    'IN-MN': [24.7, 93.9], 'IN-ML': [25.5, 91.3], 'IN-MZ': [23.2, 92.9], 'IN-NL': [26.1, 94.5], 'IN-OR': [20.5, 84.4], 'IN-PY': [11.94, 79.8], 'IN-PB': [31.1, 75.3],
+    'IN-RJ': [26.9, 73.8], 'IN-SK': [27.5, 88.5], 'IN-TN': [11.1, 78.6], 'IN-TG': [17.9, 79.1], 'IN-TR': [23.9, 91.7], 'IN-UP': [27.0, 80.9], 'IN-UT': [30.1, 79.0],
+    'IN-WB': [23.0, 87.9], 'LK': [7.9, 80.7], 'NP': [28.4, 84.1], 'BD': [23.7, 90.4], 'BT': [27.5, 90.4], 'IN': [22.5, 79.0],
+  };
   const REGIONS = [
     ['IN', 'India', null],
     ['IN-AN', 'Andaman & Nicobar Islands', 'IN'], ['IN-AP', 'Andhra Pradesh', 'IN'], ['IN-AR', 'Arunachal Pradesh', 'IN'],
@@ -47,7 +56,28 @@
     ['IN-TN', 'Tamil Nadu', 'IN'], ['IN-TG', 'Telangana', 'IN'], ['IN-TR', 'Tripura', 'IN'], ['IN-UP', 'Uttar Pradesh', 'IN'],
     ['IN-UT', 'Uttarakhand', 'IN'], ['IN-WB', 'West Bengal', 'IN'],
     ['LK', 'Sri Lanka', null], ['NP', 'Nepal', null], ['BD', 'Bangladesh', null], ['BT', 'Bhutan', null],
-  ].map(([code, name, parent]) => ({ code, name, parent }));
+    // Andaman & Nicobar: districts and main islands (island checklists are filled by reviewers from verified records)
+    ['IN-AN-SA', 'South Andaman (district)', 'IN-AN', 'district', 11.62, 92.72],
+    ['IN-AN-NM', 'North & Middle Andaman (district)', 'IN-AN', 'district', 12.75, 92.88],
+    ['IN-AN-NI', 'Nicobar (district)', 'IN-AN', 'district', 8.0, 93.5],
+    ['IN-AN-I-SAI', 'South Andaman Island', 'IN-AN-SA', 'island', 11.65, 92.70],
+    ['IN-AN-I-RUT', 'Rutland Island', 'IN-AN-SA', 'island', 11.42, 92.65],
+    ['IN-AN-I-SWD', 'Swaraj Dweep (Havelock)', 'IN-AN-SA', 'island', 11.98, 92.98],
+    ['IN-AN-I-SHD', 'Shaheed Dweep (Neil)', 'IN-AN-SA', 'island', 11.83, 93.03],
+    ['IN-AN-I-LAI', 'Little Andaman', 'IN-AN-SA', 'island', 10.65, 92.53],
+    ['IN-AN-I-BAR', 'Baratang Island', 'IN-AN-NM', 'island', 12.12, 92.78],
+    ['IN-AN-I-MAI', 'Middle Andaman', 'IN-AN-NM', 'island', 12.55, 92.85],
+    ['IN-AN-I-NAI', 'North Andaman', 'IN-AN-NM', 'island', 13.20, 92.93],
+    ['IN-AN-I-NAR', 'Narcondam Island', 'IN-AN-NM', 'island', 13.45, 94.27],
+    ['IN-AN-I-CAR', 'Car Nicobar', 'IN-AN-NI', 'island', 9.17, 92.79],
+    ['IN-AN-I-KAM', 'Kamorta', 'IN-AN-NI', 'island', 8.08, 93.52],
+    ['IN-AN-I-KAT', 'Katchal', 'IN-AN-NI', 'island', 7.95, 93.40],
+    ['IN-AN-I-TER', 'Teressa', 'IN-AN-NI', 'island', 8.28, 93.13],
+    ['IN-AN-I-LNI', 'Little Nicobar', 'IN-AN-NI', 'island', 7.33, 93.68],
+    ['IN-AN-I-GNI', 'Great Nicobar', 'IN-AN-NI', 'island', 7.00, 93.85],
+  ].map(([code, name, parent, kind, lat, lng]) => ({ code, name, parent,
+    kind: kind || (!parent ? 'country' : ['IN-AN', 'IN-CH', 'IN-DH', 'IN-DL', 'IN-JK', 'IN-LA', 'IN-LD', 'IN-PY'].includes(code) ? 'ut' : 'state'),
+    lat: lat ?? CENTRES[code]?.[0] ?? null, lng: lng ?? CENTRES[code]?.[1] ?? null }));
 
   const PEN = ['IN-KA', 'IN-KL', 'IN-TN', 'IN-AP', 'IN-TG', 'IN-MH', 'IN-GA', 'IN-PY'];
   const MAIN = ['IN-AP', 'IN-AS', 'IN-BR', 'IN-CT', 'IN-DL', 'IN-GA', 'IN-GJ', 'IN-HR', 'IN-JH', 'IN-KA', 'IN-KL', 'IN-MP', 'IN-MH',
@@ -56,7 +86,15 @@
   const COAST = ['IN-OR', 'IN-AP', 'IN-TN', 'IN-KL', 'IN-KA', 'IN-GA', 'IN-MH', 'IN-GJ', 'IN-WB', 'IN-AN', 'IN-LD', 'IN-PY'];
   const u = (...a) => [...new Set(a.flat())];
 
+  const GROUP_BY_FAMILY = { Elapidae: 'snake', Viperidae: 'snake', Pythonidae: 'snake', Colubridae: 'snake', Natricidae: 'snake', Boidae: 'snake', Typhlopidae: 'snake',
+    Varanidae: 'monitor', Agamidae: 'agama', Chamaeleonidae: 'chameleon', Gekkonidae: 'gecko', Scincidae: 'skink', Lacertidae: 'lizard',
+    Bufonidae: 'toad', Ichthyophiidae: 'caecilian', Crocodylidae: 'crocodilian', Gavialidae: 'crocodilian', Testudinidae: 'tortoise' };
+  const ORDER_BY_PACK = { snakes: 'Squamata', lizards: 'Squamata', frogs: 'Anura' };
   const S = (pack, common, sci, family, o) => Object.assign({
+    genus: sci.split(' ')[0],
+    order_name: ORDER_BY_PACK[pack] || (/Crocodylidae|Gavialidae/.test(family) ? 'Crocodylia' : 'Testudines'),
+    taxon_group: GROUP_BY_FAMILY[family] || (pack === 'frogs' ? 'frog' : pack === 'turtles' ? 'turtle' : pack === 'lizards' ? 'lizard' : 'snake'),
+    refs: 'Starter data: verify against the Reptile Database (reptile-database.reptarium.cz), Amphibian Species of the World and the IUCN Red List.',
     id: sci.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-+$/, ''),
     pack, common, sci, family, venom: 'non', toxic: 'non', iucn: 'LC', endemic: false, sensitive: false,
     size: '', habitat: '', distribution: '', id_notes: '', behaviour: '', similar: '', regions: [], images: [],

@@ -3,3 +3,6 @@ node_modules/
 supabase/.temp/
 _site/
 dashboard-app/node_modules/
+
+tests/local-supabase/node_modules/
+tests/local-supabase/storage/

@@ -18,7 +18,8 @@ import type { ChecklistEntry, ChecklistStatus, Species } from "@/lib/hw";
 import type { NavId } from "@/components/ui/app-1-utils/app-1-data";
 
 export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; go: (id: NavId, q?: Record<string, string>) => void }) {
-  const { hw, regions, species, sightings, packs, spById, regionName, reload, isAdmin } = useData();
+  const { hw, regions, species, sightings, packs, spById, regionName, reload, isAdmin, me } = useData();
+  const canAdd = isAdmin || me.role === "reviewer";   // reviewers add / update; only the Admin removes
   const act = useAction();
   const [region, setRegion] = React.useState(initialRegion || hw.C.DEFAULT_REGION || "IN");
   const [entries, setEntries] = React.useState<ChecklistEntry[] | null>(null);
@@ -90,7 +91,7 @@ export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; 
                 <CardTitle className="text-xl">{regionName(region)}</CardTitle>
                 <CardDescription>{total} species on the core checklist · {endemic} endemic · {threatened} threatened (CR/EN/VU)</CardDescription>
               </div>
-              {isAdmin && (
+              {canAdd && (
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={() => setDialog("add")}><Plus /> Add species</Button>
                   <Button variant="outline" onClick={() => setDialog("paste")}><ClipboardPaste /> Paste names</Button>
@@ -123,7 +124,7 @@ export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; 
                 {offList.map((id) => (
                   <span key={id} className="inline-flex items-center gap-2 rounded-full border bg-background py-1 pl-3 pr-1 text-sm">
                     {spById[id].common} <span className="text-xs text-muted-foreground">×{recHere[id].n}</span>
-                    {isAdmin && <Button size="sm" variant="secondary" className="h-7 rounded-full px-2.5" onClick={() => setStatus(id, "native")}><Plus /> Add</Button>}
+                    {canAdd && <Button size="sm" variant="secondary" className="h-7 rounded-full px-2.5" onClick={() => setStatus(id, "native")}><Plus /> Add</Button>}
                   </span>
                 ))}
                 <Button size="sm" variant="ghost" onClick={() => go("submissions", { region, status: "flagged" })}>Review records →</Button>
@@ -151,7 +152,7 @@ export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; 
                       <TableCell><IucnBadge code={s.iucn} /></TableCell>
                       <TableCell className="hidden md:table-cell"><VenomBadge s={s} /></TableCell>
                       <TableCell>
-                        <NativeSelect value={e.status} disabled={!isAdmin} onChange={(ev) => setStatus(s.id, ev.target.value as ChecklistStatus)} className="w-36" aria-label={`Status of ${s.common}`}>
+                        <NativeSelect value={e.status} disabled={!canAdd} onChange={(ev) => setStatus(s.id, ev.target.value as ChecklistStatus)} className="w-36" aria-label={`Status of ${s.common}`}>
                           {CHECKLIST_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
                         </NativeSelect>
                       </TableCell>

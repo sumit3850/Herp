@@ -18,6 +18,7 @@ import { OverviewPage } from "@/pages/overview";
 import { SubmissionsPage } from "@/pages/submissions";
 import { ChecklistsPage } from "@/pages/checklists";
 import { SpeciesPage } from "@/pages/species";
+import { ProposalsPage, RegionsPage, SettingsPage } from "@/pages/governance";
 import { AuditPage, FeedbackPage, MapPage, PacksPage, ReportsPage, RoadkillPage, UsersPage } from "@/pages/manage";
 
 /* ── theme: system by default, toggle persists ── */
@@ -67,7 +68,7 @@ export default function App({ hw }: { hw: HWGlobal }) {
   );
 }
 
-const REVIEWER_PAGES: NavId[] = ["overview", "submissions", "roadkill", "map", "checklists", "reports"];
+const REVIEWER_PAGES: NavId[] = ["overview", "submissions", "roadkill", "map", "checklists", "species", "proposals", "reports"];
 
 function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSignOut: () => void }) {
   const { me, hw, sightings, isAdmin } = useData();
@@ -98,7 +99,7 @@ function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSig
           </div>
           <div className="ml-auto flex items-center gap-1.5">
             {hw.DEMO && <Badge variant="warning" className="hidden sm:inline-flex">Demo data</Badge>}
-            {!isAdmin && <Badge variant="secondary">Reviewer</Badge>}
+            {isAdmin ? <Badge className="gap-1"><Crown className="size-3" /> Admin</Badge> : <Badge variant="secondary">Reviewer</Badge>}
             <Button variant="ghost" size="icon" aria-label="Toggle dark mode" onClick={theme.toggle}>{theme.theme === "dark" ? <Sun /> : <Moon />}</Button>
             <Avatar className="ml-1 size-8"><AvatarFallback className="bg-primary/15 text-xs font-semibold text-primary">{initials(me.full_name || me.username)}</AvatarFallback></Avatar>
           </div>
@@ -115,6 +116,9 @@ function Shell({ theme, onSignOut }: { theme: ReturnType<typeof useTheme>; onSig
           {page === "reports" && <ReportsPage />}
           {page === "audit" && <AuditPage />}
           {page === "feedback" && <FeedbackPage />}
+          {page === "proposals" && <ProposalsPage />}
+          {page === "regions" && <RegionsPage />}
+          {page === "settings" && <SettingsPage />}
         </main>
       </SidebarInset>
     </SidebarProvider>
@@ -125,7 +129,6 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
   const toast = useToast();
   const [hasAdmin, setHasAdmin] = React.useState<boolean | null | undefined>(undefined);
   const [req, setReq] = React.useState<AccessRequest | null>(null);
-  const [role, setRole] = React.useState<"reviewer" | "admin">("reviewer");
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const load = React.useCallback(async () => {
@@ -140,7 +143,7 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
         <div className="space-y-2 text-center">
           <ShieldAlert className="mx-auto size-10 text-amber-500" />
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard access</h1>
-          <p className="text-muted-foreground">Signed in as <b className="text-foreground">{me.email || "@" + me.username}</b>. This account works in the field app; the dashboard needs the <b>reviewer</b> or <b>admin</b> role.</p>
+          <p className="text-muted-foreground">Signed in as <b className="text-foreground">{me.email || "@" + me.username}</b>. This account works in the field app; the dashboard needs the <b>reviewer</b> role (approved by the Admin).</p>
         </div>
 
         {hasAdmin === null && (
@@ -153,40 +156,30 @@ function NoAccess({ me, hw, onSignOut, onGranted }: { me: Profile; hw: HWGlobal;
         )}
 
         {hasAdmin === false && (
-          <div className="rounded-xl border border-primary/40 bg-primary/5 p-5">
-            <h2 className="flex items-center gap-2 font-semibold"><Crown className="size-4 text-primary" /> This project has no admin yet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">If you set up HerpWatch, make this account the admin. This works only once: the option disappears as soon as an admin exists.</p>
-            <Button className="mt-3 w-full" disabled={busy} onClick={async () => {
-              if (!confirm(`Make ${me.email} the admin of this HerpWatch project?`)) return;
-              setBusy(true);
-              try { const p = await hw.api.claimFirstAdmin(); toast("You are now the admin"); onGranted(p); } catch (e) { toast((e as Error).message, "error"); setBusy(false); load(); }
-            }}><Crown /> Become the first admin</Button>
+          <div className="rounded-xl border bg-muted/40 p-5">
+            <h2 className="flex items-center gap-2 font-semibold"><Crown className="size-4 text-primary" /> No platform owner yet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">The Admin is the single owner of the platform and can only be set inside Supabase, never from the app. In Supabase → SQL Editor run: <code className="rounded bg-muted px-1">select public.set_platform_owner('{me.email}');</code> then tap “Check again”.</p>
+            <Button className="mt-3" onClick={recheck}><RefreshCw /> Check again</Button>
           </div>
         )}
 
-        {hasAdmin === true && req?.status === "pending" && (
+        {hasAdmin !== null && hasAdmin !== undefined && req?.status === "pending" && (
           <div className="rounded-xl border bg-muted/40 p-5">
             <h2 className="flex items-center gap-2 font-semibold"><Hourglass className="size-4" /> Request sent</h2>
-            <p className="mt-1 text-sm text-muted-foreground">You asked for <b>{req.requested_role}</b> access on {new Date(req.created_at).toLocaleDateString()}. An admin will approve it from the Users page; then tap “Check again”.</p>
+            <p className="mt-1 text-sm text-muted-foreground">You asked for <b>{req.requested_role}</b> access on {new Date(req.created_at).toLocaleDateString()}. The Admin will approve it from the Users page; then tap “Check again”.</p>
             <div className="mt-3 flex gap-2"><Button onClick={recheck}><RefreshCw /> Check again</Button></div>
           </div>
         )}
 
-        {hasAdmin === true && req?.status !== "pending" && (
+        {hasAdmin !== null && hasAdmin !== undefined && req?.status !== "pending" && (
           <div className="rounded-xl border p-5">
             <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">Request access</h2><Button size="sm" variant="ghost" onClick={recheck}><RefreshCw /> Check again</Button></div>
             {req?.status === "declined" && <p className="mt-1 text-sm text-destructive">Your last request was declined. You can ask again with more detail.</p>}
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {([["reviewer", "Reviewer", "Review and accept submissions"], ["admin", "Admin", "Manage checklists, species, users"]] as const).map(([k, t, d]) => (
-                <button key={k} type="button" onClick={() => setRole(k)} className={`rounded-lg border p-3 text-left transition-colors ${role === k ? "border-primary bg-primary/10" : "hover:bg-accent"}`}>
-                  <span className="block font-medium">{t}</span><span className="text-xs text-muted-foreground">{d}</span>
-                </button>
-              ))}
-            </div>
+            <p className="mt-1 text-sm text-muted-foreground">Reviewers verify observations, suggest identifications and propose checklist and species changes. The Admin (platform owner) approves.</p>
             <Textarea className="mt-3" rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why do you need it? (e.g. state coordinator for Kerala)" />
             <Button className="mt-3 w-full" disabled={busy} onClick={async () => {
               setBusy(true);
-              try { setReq(await hw.api.requestAccess(role, note)); toast("Request sent to the admins"); } catch (e) { toast((e as Error).message, "error"); }
+              try { setReq(await hw.api.requestAccess(note)); toast("Request sent to the admins"); } catch (e) { toast((e as Error).message, "error"); }
               setBusy(false);
             }}><Send /> Send request</Button>
           </div>

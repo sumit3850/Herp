@@ -76,14 +76,15 @@ export function SignUpPage({ title, description, heroImageSrc, testimonials = []
               </div>
               <fieldset className="animate-element animate-delay-600">
                 <legend className="text-sm font-medium text-muted-foreground">I want to…</legend>
-                <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {([["", "Record sightings", "Field app"], ["reviewer", "Review records", "Needs approval"], ["admin", "Run the project", "Needs approval"]] as const).map(([v, t, d], i) => (
+                <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {([["", "Record observations", "Field app, free"], ["reviewer", "Review records", "Admin approves"]] as const).map(([v, t, d], i) => (
                     <label key={v} className="flex cursor-pointer flex-col rounded-2xl border border-border p-3 text-sm transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/10">
                       <input type="radio" name="requested_role" value={v} defaultChecked={i === 0} className="sr-only" />
                       <span className="font-medium">{t}</span><span className="text-xs text-muted-foreground">{d}</span>
                     </label>
                   ))}
                 </div>
+                <p className="mt-1 text-xs text-muted-foreground">The Admin role belongs to the platform owner only and can’t be requested.</p>
               </fieldset>
               <button type="submit" disabled={busy} className="animate-element animate-delay-700 w-full rounded-2xl bg-primary py-4 font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60">
                 {busy ? "Creating account…" : "Create account"}

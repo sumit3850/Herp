@@ -4,13 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>HerpWatch Field App</title>
+<meta name="description" content="Record herping sessions, observations, GPS tracks and photos of reptiles and amphibians. Works offline.">
 <meta name="theme-color" content="#1f5b3c">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="style.css">
 <style>
@@ -25,8 +26,8 @@ header.top select{width:auto;max-width:44vw;min-height:36px;padding:4px 10px;fon
 .sync{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft)}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--forest-2)}.dot.off{background:var(--muted)}.dot.pending{background:var(--amber)}
 main{max-width:760px;margin:0 auto;padding:14px 16px}
-nav.tabs{position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--surface);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom)}
-nav.tabs button{padding:8px 2px 9px;font-size:11px;font-weight:600;color:var(--ink-soft);display:flex;flex-direction:column;align-items:center;gap:2px}
+nav.tabs{position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--surface);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(6,1fr);padding-bottom:env(safe-area-inset-bottom)}
+nav.tabs button{padding:8px 1px 9px;font-size:10.5px;font-weight:600;color:var(--ink-soft);display:flex;flex-direction:column;align-items:center;gap:2px}
 nav.tabs button .i{display:grid;place-items:center;height:24px}nav.tabs button .i .ic{width:21px;height:21px}
 nav.tabs button.on{color:var(--forest-2)}
 .view{display:none}.view.on{display:block}
@@ -62,7 +63,7 @@ nav.tabs button.on{color:var(--forest-2)}
 .cnt .plus{background:var(--forest-2);color:#fff;border-color:var(--forest-2)}
 .rec-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line-soft)}
 .rec-row.has{background:var(--forest-soft)}
-#rkmap,#tripmap{height:260px;border-radius:12px;margin:10px 0;z-index:1}
+#recmap,#exmap,#sesmap,.minimap{height:260px;border-radius:12px;margin:10px 0;z-index:1}
 .bigbtn{width:100%;padding:20px;border-radius:16px;font-size:18px;font-weight:700;background:var(--red);color:#fff;box-shadow:var(--shadow)}
 .opt{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);font-weight:600}
 .opt .e{width:14px;height:14px;border-radius:50%;background:var(--pc)}.opt.on{border-color:var(--forest-2);background:var(--forest-soft)}
@@ -115,7 +116,7 @@ body.authing main{max-width:none;padding:0}
 /* ── desktop: bottom tabs become a left rail ── */
 @media(min-width:1024px){
   body:not(.authing){padding-bottom:0;padding-left:232px}
-  body:not(.authing) header.top,body:not(.authing) #demo{margin-left:-232px;position:relative;z-index:60}
+  body:not(.authing) header.top{margin-left:-232px;position:relative;z-index:60}
   body:not(.authing) header.top{position:sticky;padding-left:20px}
   header.top .brand{width:200px}
   nav.tabs{top:0;z-index:30;padding-top:calc(var(--topoff,0px) + 72px)!important;right:auto;width:232px;border-top:0;border-right:1px solid var(--line);grid-template-columns:1fr;grid-auto-rows:min-content;align-content:start;padding:0 12px 20px;gap:4px}
@@ -135,13 +136,120 @@ body.authing main{max-width:none;padding:0}
 .storeitem input{width:22px;min-height:22px;height:22px;accent-color:var(--forest-2)}
 .storeitem.owned{opacity:.6}
 .empty{text-align:center;color:var(--ink-soft);padding:30px 10px}
+
+/* ── v4 field app ── */
+.hello{margin:4px 0 14px}.hello h1{font-size:24px;letter-spacing:-.02em}.hello p{color:var(--ink-soft);font-size:14px}
+.startbtn{width:100%;display:flex;align-items:center;gap:14px;padding:20px 18px;border-radius:18px;background:linear-gradient(135deg,var(--forest),var(--forest-2));color:#fff;box-shadow:var(--shadow);text-align:left}
+.startbtn .ic{width:30px;height:30px;flex-shrink:0}.startbtn b{display:block;font-size:18px;letter-spacing:.02em}.startbtn small{opacity:.85;font-size:13px}
+.startbtn.live{background:linear-gradient(135deg,#9b2c2c,var(--red))}
+.subbtn{width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;margin-top:10px;border-radius:14px;border:1px solid var(--line);background:var(--surface);font-weight:600;text-align:left}
+.subbtn .ic{width:20px;height:20px;color:var(--forest-2)}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tile b{display:block;font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:-.02em}.tile span{font-size:11.5px;color:var(--ink-soft)}
+.sect{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}.sect h3{font-size:15px}
+.bars{display:flex;align-items:flex-end;gap:4px;height:90px;padding:6px 0 0}
+.bars div{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
+.bars i{display:block;width:100%;max-width:26px;border-radius:4px 4px 0 0;background:var(--forest-2);min-height:2px}
+.bars small{font-size:9.5px;color:var(--ink-soft)}
+.types{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.type{display:flex;gap:10px;align-items:center;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);text-align:left;font-weight:600;font-size:14px}
+.type .ic{width:20px;height:20px;color:var(--forest-2);flex-shrink:0}.type.on{border-color:var(--forest-2);background:var(--forest-soft)}
+.live-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow)}
+.timer{font-family:var(--mono);font-size:38px;font-weight:600;letter-spacing:-.03em;line-height:1}
+.livestat{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
+.livestat div{background:var(--surface-2);border-radius:10px;padding:6px 8px}.livestat b{font-family:var(--mono);font-size:15px;display:block}.livestat span{font-size:11px;color:var(--ink-soft)}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--line);white-space:nowrap}
+.badge.ok{background:var(--forest-soft);color:var(--forest-2);border-color:transparent}.badge.warn{background:var(--amber-soft);color:var(--amber);border-color:transparent}
+.badge.bad{background:var(--red-soft);color:var(--red);border-color:transparent}.badge.pending{background:var(--blue-soft);color:var(--blue);border-color:transparent}
+.badge.rec{background:var(--red);color:#fff;border-color:transparent}.badge.rec::before{content:"";width:7px;height:7px;border-radius:50%;background:#fff;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.25}}
+.seg{display:flex;gap:4px;flex-wrap:wrap}
+.seg button{padding:7px 11px;border-radius:9px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:550}
+.seg button.on{background:var(--forest-2);border-color:var(--forest-2);color:#fff}
+.fld{margin-top:12px}.fld>label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-bottom:5px}
+.obsrow{display:flex;gap:10px;align-items:center;padding:10px;width:100%;text-align:left;border-bottom:1px solid var(--line-soft)}
+.obsrow:last-child{border-bottom:0}
+.obsrow .th{width:48px;height:48px;border-radius:10px;overflow:hidden;flex-shrink:0;background:var(--forest-soft);display:grid;place-items:center;color:var(--forest-2)}
+.obsrow .th img{width:100%;height:100%;object-fit:cover}.obsrow .th .ic{width:20px;height:20px}
+.obsrow .t{font-weight:600;font-size:14.5px}.obsrow .s{font-size:12.5px;color:var(--ink-soft)}
+.typeahead{position:relative}
+.ta-list{position:absolute;left:0;right:0;top:100%;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);max-height:260px;overflow:auto;margin-top:4px}
+.ta-list button{display:block;width:100%;text-align:left;padding:9px 12px;border-bottom:1px solid var(--line-soft);font-size:14px}
+.ta-list button:hover,.ta-list button:focus{background:var(--forest-soft)}
+.chosen{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--forest-soft);margin-top:6px}
+.photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.photos .ph{position:relative;width:84px}
+.photos .ph img{width:84px;height:84px;object-fit:cover;border-radius:10px;display:block}
+.photos .ph select{min-height:28px;padding:2px 4px;font-size:11px;margin-top:3px}
+.photos .ph .rm{position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;font-size:15px;line-height:1}
+.photos .add{width:84px;height:84px;border:1.5px dashed var(--line);border-radius:10px;display:grid;place-items:center;color:var(--ink-soft);cursor:pointer}
+.loc{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:var(--surface-2);font-size:13px}
+.loc .ic{color:var(--forest-2);margin-top:2px}
+.hist{border-left:2px solid var(--line);margin:8px 0 0 6px;padding-left:12px}
+.hist div{margin-bottom:8px;font-size:13px}.hist b{font-weight:650}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:var(--amber-soft);font-size:13px;margin-top:10px}
+.cl-row{display:flex;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid var(--line-soft);width:100%;text-align:left}
+.cl-row .ck{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;flex-shrink:0;color:#fff}
+.cl-row .ck.seen{background:var(--forest-2);border-color:var(--forest-2)}.cl-row .ck.else{border-color:var(--forest-2);color:var(--forest-2)}
+.cl-row .ck .ic{width:14px;height:14px}
+.progress{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0}.progress i{display:block;height:100%;background:var(--forest-2)}
+.filters{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+.filters select,.filters input{min-height:36px;padding:5px 8px;font-size:13px}
+.subtabs{display:flex;gap:4px;background:var(--surface-2);padding:4px;border-radius:12px;margin-bottom:12px}
+.subtabs button{flex:1;padding:8px 2px;font-size:12.5px!important;border-radius:9px;font-weight:600;font-size:13.5px;color:var(--ink-soft)}.subtabs button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+.kvgrid{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13.5px;margin-top:10px}.kvgrid dt{color:var(--ink-soft)}.kvgrid dd{margin:0}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ink-soft);margin-top:4px}
+.legend span{display:inline-flex;align-items:center;gap:5px}.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.profile-head{display:flex;gap:14px;align-items:center}
+.avatar{width:56px;height:56px;border-radius:50%;background:var(--forest-2);color:#fff;display:grid;place-items:center;font-weight:650;font-size:20px;flex-shrink:0}
+.menu{display:flex;flex-direction:column}.menu>*{display:flex;gap:12px;align-items:center;padding:13px 4px;border-bottom:1px solid var(--line-soft);text-align:left;width:100%;text-decoration:none;color:var(--ink);font-weight:550}
+.menu>*:last-child{border-bottom:0}.menu .ic{color:var(--forest-2);width:19px;height:19px}.menu .grow{flex:1}
+details.more summary{cursor:pointer;font-weight:600;font-size:13.5px;color:var(--forest-2);margin-top:12px}
+.startclock{display:grid;grid-template-columns:1fr 1fr;text-align:center;margin-bottom:10px;overflow:hidden}
+.startclock>div{padding:14px 8px}.startclock>div+div{border-left:1px solid var(--line)}
+.startclock span{display:block;font-size:12.5px;color:var(--ink-soft)}.startclock b{display:block;font-size:24px;font-weight:600;letter-spacing:-.02em;margin-top:2px}
+.round{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);font-size:20px;color:var(--ink-soft);background:var(--surface)}
+.switchrow{display:flex;align-items:center;gap:12px;padding:12px 14px;margin-bottom:12px;cursor:pointer}
+.switch{appearance:none;-webkit-appearance:none;width:50px!important;min-height:0!important;height:28px;border-radius:14px;background:var(--line);position:relative;border:0;padding:0;cursor:pointer;transition:background .2s;flex-shrink:0}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s}
+.switch:checked{background:var(--forest-2)}.switch:checked::after{left:25px}
+.pillseg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--surface)}
+.pillseg button{padding:10px 6px;font-weight:600;font-size:13.5px;color:var(--ink-soft)}.pillseg button.on{background:var(--forest);color:#fff}
+.sesrow{display:flex;gap:14px;align-items:center;width:100%;text-align:left;padding:12px 2px;border-bottom:1px solid var(--line-soft)}
+.sesrow .t{font-weight:650;font-size:16px}.sesrow .s{font-size:12.5px;color:var(--ink-soft)}
+.sptile{width:62px;height:62px;border-radius:14px;background:var(--forest);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0}
+.sptile.local{background:var(--amber)}.sptile b{font-size:22px;line-height:1;font-family:var(--mono)}.sptile small{font-size:10.5px;opacity:.9}
+.yearbars .yb{display:grid;grid-template-columns:48px 34px 1fr 34px;gap:8px;align-items:center;padding:6px 8px;border-radius:10px}
+.yearbars .yb.cur{background:var(--amber-soft)}.yearbars .yb b{font-family:var(--mono)}.yearbars .n{font-family:var(--mono);color:var(--forest-2);font-weight:600;text-align:right}
+.yearbars .track{position:relative;height:14px}.yearbars .track i{position:absolute;left:0;top:0;bottom:0;border-radius:7px;background:var(--blue)}.yearbars .track i.full{background:var(--line)}
+.yearbars .t{font-family:var(--mono);color:var(--forest-2);font-weight:600;font-size:13px}
+.nbhead{display:flex;align-items:center;gap:10px;margin-bottom:10px}.nbhead h2{font-size:20px}
+.tile.big{text-align:left}.tile.big b{font-size:26px}
+.menu.nav>button{padding:12px 14px}.menu.nav .badge{margin-right:4px}
+.cl-row .th.mini{width:40px;height:40px;border-radius:8px;overflow:hidden;flex-shrink:0;background:var(--forest-soft)}.cl-row .th.mini img{width:100%;height:100%;object-fit:cover}
+.cl-row .th.mini .mono-thumb b{font-size:13px}.cl-row .th.mini .mono-thumb small{display:none}
+.cl-row.me{background:var(--forest-soft)}.rk{width:26px;font-family:var(--mono);color:var(--ink-soft);text-align:center}
+.podium{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:end;margin-top:14px}
+.pod{display:flex;flex-direction:column;align-items:center;text-align:center}.pod .pn{font-size:12.5px;line-height:1.3;margin-bottom:6px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.pod .pa{position:relative;width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-weight:650;font-size:20px;background:var(--surface-2);border:3px solid var(--line);margin-bottom:-14px;z-index:1}
+.pod .pa span{position:absolute;right:-6px;bottom:-4px;width:22px;height:22px;border-radius:50%;font-size:12px;display:grid;place-items:center;background:var(--surface);border:2px solid currentColor}
+.pod .pb{width:100%;border-radius:10px 10px 0 0}
+.pod.p1 .pa{border-color:#d4a72c;width:64px;height:64px}.pod.p1 .pb{height:92px;background:linear-gradient(#d4a72c,#a8801c)}
+.pod.p2 .pa{border-color:#9aa5b1}.pod.p2 .pb{height:64px;background:linear-gradient(#b9c2cc,#7d8893)}
+.pod.p3 .pa{border-color:#c0703a}.pod.p3 .pb{height:48px;background:linear-gradient(#d0864f,#9c5427)}
+.viewtog{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}.viewtog button{padding:4px 8px;color:var(--ink-soft)}.viewtog button.on{background:var(--forest-2);color:#fff}
+.viewtog .ic{width:16px;height:16px}
+.tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:5px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-soft);vertical-align:2px}
+.splist.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.splist.grid .sp{flex-direction:column;align-items:stretch}.splist.grid .sp .th{width:100%;height:120px}.splist.grid .pills{display:none}
+@media(max-width:380px){.tiles{grid-template-columns:1fr 1fr}.filters{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
-<div id="demo" class="demo-banner hidden">Demo mode — data stays in this browser. Sign in as <b>field@demo / field</b> or <b>admin@demo / admin</b>.</div>
 <header class="top">
   <span class="brand"><img src="assets/icon.svg" alt=""><span id="brand">HerpWatch</span></span>
-  <select id="region" aria-label="Region"></select>
+  <select id="region" aria-label="Region for Explore and Checklist"></select>
   <span class="sync" id="sync"><span class="dot" id="syncdot"></span><span id="synctxt">online</span></span>
   <button class="iconbtn" data-install title="Install app" aria-label="Install app"></button>
 </header>
@@ -159,7 +267,7 @@ body.authing main{max-width:none;padding:0}
           <div class="tabs2 ae d3" role="tablist"><button id="t-in" class="on" role="tab">Sign in</button><button id="t-up" role="tab">Create account</button></div>
           <div id="auth-note" class="auth-note hidden" role="status"></div>
           <form id="f-in">
-            <div class="ae d3"><label class="f" for="in-email">Email or username</label><div class="glass"><input id="in-email" autocomplete="username" placeholder="Enter your email or username" required></div></div>
+            <div class="ae d3"><label class="f" for="in-email">E-mail</label><div class="glass"><input id="in-email" type="email" autocomplete="email" placeholder="Enter your e-mail address" required></div></div>
             <div class="ae d4"><label class="f" for="in-pw">Password</label><div class="glass pw"><input id="in-pw" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="eye" data-eye="in-pw" aria-label="Show password" data-ic="eye"></button></div></div>
             <div class="row ae d5" style="justify-content:flex-end;margin-top:8px"><button type="button" class="linkbtn" id="forgot">Reset password</button></div>
             <button class="btn btn-primary btn-block big ae d6" style="margin-top:12px">Sign in</button>
@@ -177,53 +285,61 @@ body.authing main{max-width:none;padding:0}
           <button type="button" class="btn btn-ghost btn-block big ae d8" id="g-in"><svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>Continue with Google</button>
           <button type="button" class="btn btn-ghost btn-block hidden" id="offline-go" style="margin-top:10px"></button>
           <p class="tiny muted ae d9" id="diag" style="text-align:center;margin-top:10px"></p>
-          <p class="tiny muted ae d9" style="text-align:center;margin-top:6px">One account for the app and the dashboard. Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
+          <p class="tiny muted ae d9" style="text-align:center;margin-top:6px">One account for the app and the dashboard. Recording observations is always free.</p>
         </div>
       </div>
       <div class="auth-hero" aria-hidden="true">
         <div class="hero-img"></div>
         <div class="hero-cards">
           <div class="hcard t1"><span class="he" data-ic="book-open"></span><div><b>Offline field guide</b><small>Safety info always free</small><p>Venomous &amp; poisonous flags, IUCN status, habitat and distribution for every species.</p></div></div>
-          <div class="hcard t2"><span class="he" data-ic="clipboard-list"></span><div><b>eBird-style checklists</b><small>Timed · GPS-tracked</small><p>Counts, life stage and photos, and it syncs when you’re back online.</p></div></div>
-          <div class="hcard t3"><span class="he" data-ic="route"></span><div><b>Road-kill logger</b><small>Tracks + points</small><p>Survey effort is recorded, so results come out as kills per 100 km.</p></div></div>
+          <div class="hcard t2"><span class="he" data-ic="clipboard-list"></span><div><b>Herping sessions</b><small>Timed · GPS-tracked</small><p>Every observation keeps its own time, GPS point and photos, and syncs when you’re back online.</p></div></div>
+          <div class="hcard t3"><span class="he" data-ic="route"></span><div><b>Verified records</b><small>Reviewed by experts</small><p>Reviewers verify identifications; your original ID is always kept.</p></div></div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- GUIDE -->
-  <section class="view" id="v-guide">
-    <div class="search"><input id="q" placeholder="Search common or scientific name" type="search"></div>
-    <div class="chips" id="packchips"></div>
-    <div class="chips" id="filterchips"></div>
-    <p class="small muted" id="guidecount" style="margin:2px 0 8px"></p>
-    <div class="splist" id="splist"></div>
-  </section>
-
-  <!-- IDENTIFY -->
-  <section class="view" id="v-identify"><div id="idf"></div></section>
-
-  <!-- RECORD (eBird-style checklist) -->
+  <!-- HOME -->
+  <section class="view" id="v-home"><div id="home"></div></section>
+  <!-- RECORD -->
   <section class="view" id="v-record"><div id="rec"></div></section>
-
-  <!-- ROAD-KILL -->
-  <section class="view" id="v-roadkill"><div id="rk"></div></section>
-
-  <!-- ME -->
-  <section class="view" id="v-me"><div id="me"></div></section>
+  <!-- EXPLORE: map · species guide · identify -->
+  <section class="view" id="v-explore">
+    <div class="subtabs" id="ex-tabs"><button data-x="nearby" class="on">Nearby</button><button data-x="map">Map</button><button data-x="guide">Species</button><button data-x="identify">Identify</button><button data-x="top">Top</button></div>
+    <div id="ex-nearby"></div>
+    <div id="ex-map" class="hidden"></div>
+    <div id="ex-guide" class="hidden">
+      <div class="search"><input id="q" placeholder="Search common or scientific name, family, genus" type="search"></div>
+      <div class="chips" id="packchips"></div>
+      <div class="filters" id="taxfilters"></div>
+      <div class="chips" id="filterchips"></div>
+      <div class="small muted row" id="guidecount" style="margin:2px 0 8px"></div>
+      <div class="splist" id="splist"></div>
+    </div>
+    <div id="ex-identify" class="hidden"><div id="idf"></div></div>
+    <div id="ex-top" class="hidden"></div>
+  </section>
+  <!-- CHECKLIST -->
+  <section class="view" id="v-checklist"><div id="cl"></div></section>
+  <!-- MY OBSERVATIONS -->
+  <section class="view" id="v-obs"><div id="obs"></div></section>
+  <!-- PROFILE -->
+  <section class="view" id="v-profile"><div id="prof"></div></section>
 </main>
 
 <nav class="tabs" id="tabs">
-  <button data-v="guide" class="on"><span class="i" data-ic="book-open"></span>Guide</button>
-  <button data-v="identify"><span class="i" data-ic="scan-search"></span>Identify</button>
+  <button data-v="home" class="on"><span class="i" data-ic="house"></span>Home</button>
   <button data-v="record"><span class="i" data-ic="clipboard-list"></span>Record</button>
-  <button data-v="roadkill"><span class="i" data-ic="route"></span>Road-kill</button>
-  <button data-v="me"><span class="i" data-ic="user"></span>Me</button>
+  <button data-v="explore"><span class="i" data-ic="compass"></span>Explore</button>
+  <button data-v="checklist"><span class="i" data-ic="list-checks"></span>Checklist</button>
+  <button data-v="obs"><span class="i" data-ic="binoculars"></span>My records</button>
+  <button data-v="profile"><span class="i" data-ic="user"></span>Profile</button>
 </nav>
 
 <div class="scrim" id="scrim"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button class="x" id="sheetx" aria-label="Close">×</button><div id="sheetbody"></div></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="photo-in" accept="image/*" multiple hidden>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -232,780 +348,6 @@ body.authing main{max-width:none;padding:0}
 <script src="config.js"></script>
 <script src="data/seed.js"></script>
 <script src="common.js"></script>
-<script>
-'use strict';
-const { api, IUCN, VENOM, TOXIC, util: U } = HW;
-const $ = (id) => document.getElementById(id);
-const esc = U.esc;
-
-// ───────────────────────── state ─────────────────────────
-const S = {
-  me: null, packs: [], regions: [], prices: [], index: [], unlocked: {}, ents: [],
-  region: U.lsGet('hw_region', HW.C.DEFAULT_REGION || 'IN'), checklist: [], clStatus: {}, pack: 'all', filters: new Set(), q: '',
-  view: 'guide',
-};
-const byId = (id) => S.index.find((s) => s.id === id);
-const packOf = (id) => S.packs.find((p) => p.id === id) || { name: id, emoji: '', color: '#2f7d4f' };
-const regionName = (c) => S.regions.find((r) => r.code === c)?.name || c;
-const isUnlocked = (id) => !!S.unlocked[id];
-
-function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
-function openSheet(html) { $('sheetbody').innerHTML = html; $('sheet').classList.add('on'); $('scrim').classList.add('on'); $('sheet').scrollTop = 0; }
-function closeSheet() { $('sheet').classList.remove('on'); $('scrim').classList.remove('on'); }
-$('scrim').onclick = closeSheet; $('sheetx').onclick = closeSheet;
-
-const I = (n, c = '') => (window.HWI ? HWI(n, c) : '');
-const dot = (p) => `<span class="gdot" style="--pc:${packOf(p).color}"></span>`;
-const VICON = { venomous: 'triangle-alert', mild: 'info', non: 'circle-check' };
-// specimen-label monogram (e.g. "Nn" for Naja naja) until a licensed photo is added
-function mono(s, hero) {
-  const [g = '', sp = ''] = (s.sci || '').split(' ');
-  return `<div class="mono-thumb${hero ? ' mono-hero' : ''}" style="--pc:${packOf(s.pack).color}"><b>${esc(g[0] || '')}${esc(sp[0] || '')}</b><small>${esc(hero ? s.family + ' · ' + packOf(s.pack).name : s.family)}</small></div>`;
-}
-function pills(s) {
-  const iu = IUCN[s.iucn] || IUCN.NE;
-  let h = `<span class="pill iucn" style="background:${iu.color}" title="${esc(iu.name)}">IUCN ${esc(s.iucn)}</span>`;
-  if (s.pack === 'snakes' || s.venom !== 'non') h += `<span class="pill ${s.venom === 'venomous' ? 'venom' : s.venom === 'mild' ? 'mild' : 'safe'}">${I(VICON[s.venom])} ${VENOM[s.venom].short}</span>`;
-  if (s.toxic === 'poisonous') h += `<span class="pill poison">${I('skull')} Poisonous</span>`;
-  const cst = S.clStatus?.[s.id];
-  if (s.endemic || cst === 'endemic') h += `<span class="pill end">Endemic</span>`;
-  if (cst && !['native', 'endemic'].includes(cst)) h += `<span class="pill lock" title="Status on the ${esc(regionName(S.region))} checklist">${esc(cst[0].toUpperCase() + cst.slice(1))}</span>`;
-  if (!isUnlocked(s.id)) h += `<span class="pill lock">${I('lock')} ${esc(packOf(s.pack).name)}</span>`;
-  return h;
-}
-function thumb(s) {
-  const full = S.unlocked[s.id], img = full?.images?.[0];
-  const url = typeof img === 'string' ? img : img?.url;
-  return url ? `<img src="${esc(url)}" alt="" loading="lazy">` : mono(s);
-}
-const nameHtml = (s) => `${esc(s.common)} <span class="sci">(<i>${esc(s.sci)}</i>)</span>`;
-
-// ───────────────────────── catalogue loading (cached for offline) ─────────────────────────
-async function loadCatalog() {
-  const cache = U.lsGet('hw_cat', null);
-  if (cache) Object.assign(S, { packs: cache.packs, regions: cache.regions, prices: cache.prices, index: cache.index });
-  try {
-    const [packs, regions, prices, index] = await Promise.all([api.packs(), api.regions(), api.prices(), api.speciesIndex()]);
-    Object.assign(S, { packs, regions, prices, index });
-    U.lsSet('hw_cat', { packs, regions, prices, index });
-  } catch (e) { if (!cache) toast('Offline and no cached catalogue yet'); }
-}
-async function loadUser() {
-  S.unlocked = U.lsGet('hw_unlocked_' + (S.me?.id || ''), {});
-  S.ents = U.lsGet('hw_ents_' + (S.me?.id || ''), []);
-  if (!S.me) return;
-  try {
-    S.ents = await api.myEntitlements();
-    const full = await api.unlockedSpecies();
-    S.unlocked = Object.fromEntries(full.map((s) => [s.id, s]));   // whole unlocked pack cached → works offline in the field
-    U.lsSet('hw_unlocked_' + S.me.id, S.unlocked); U.lsSet('hw_ents_' + S.me.id, S.ents);
-  } catch (e) { console.warn(e); }
-}
-async function loadChecklist(region = S.region) {
-  const key = 'hw_cl_' + region, skey = 'hw_cls_' + region;
-  if (region === S.region) {
-    S.checklist = U.lsGet(key, null) || S.index.filter((s) => (s.regions || []).includes(region)).map((s) => s.id);
-    S.clStatus = U.lsGet(skey, {});
-  }
-  try {
-    const rows = await api.checklistEntries(region);
-    const ids = rows.map((r) => r.species_id), st = Object.fromEntries(rows.map((r) => [r.species_id, r.status]));
-    U.lsSet(key, ids); U.lsSet(skey, st);
-    if (region === S.region) { S.checklist = ids; S.clStatus = st; }
-  } catch {}
-}
-
-// ── live updates: admin edits in the dashboard reach the app without a reload ──
-let liveTimer = null, liveOff = null;
-async function refreshLive() {
-  if (!S.me || S.me.guest || !isOnline()) return;
-  const before = JSON.stringify([S.checklist, S.clStatus, S.index.length, S.prices]);
-  await loadCatalog();
-  await loadChecklist();
-  const t = TRIP(), r = RK();
-  for (const reg of new Set([t?.region_code, r?.region_code].filter((x) => x && x !== S.region))) await loadChecklist(reg);
-  await loadUser();
-  if (JSON.stringify([S.checklist, S.clStatus, S.index.length, S.prices]) === before) return;
-  // re-render only screens that have no unsaved typing
-  if (S.view === 'guide') renderGuide();
-  else if (S.view === 'identify') renderIdentify();
-  toast(`Checklist for ${regionName(S.region)} updated`);
-}
-const scheduleLive = () => { clearTimeout(liveTimer); liveTimer = setTimeout(refreshLive, 800); };
-function startLive() {
-  liveOff?.();
-  liveOff = api.onCatalogChange?.(() => scheduleLive());
-}
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleLive(); });
-addEventListener('focus', scheduleLive);
-setInterval(() => { if (document.visibilityState === 'visible') refreshLive(); }, 3 * 60 * 1000);
-function fillRegionSelect(sel, value, { countryOnly = false } = {}) {
-  const countries = S.regions.filter((r) => !r.parent), opts = [];
-  for (const c of countries) {
-    opts.push(`<option value="${c.code}" ${c.code === value ? 'selected' : ''}>${esc(c.name)}${countryOnly ? '' : ' (whole country)'}</option>`);
-    if (!countryOnly) S.regions.filter((r) => r.parent === c.code).forEach((r) => opts.push(`<option value="${r.code}" ${r.code === value ? 'selected' : ''}>&nbsp;&nbsp;${esc(r.name)}</option>`));
-  }
-  sel.innerHTML = opts.join('');
-}
-
-// ───────────────────────── GPS (shared by checklist & road-kill) ─────────────────────────
-const Geo = {
-  wid: null, last: null, subs: new Set(), lock: null,
-  start(fn) {
-    if (fn) this.subs.add(fn);
-    if (this.wid != null || !navigator.geolocation) return;
-    this.wid = navigator.geolocation.watchPosition((p) => {
-      this.last = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: p.timestamp, speed: p.coords.speed };
-      this.subs.forEach((f) => f(this.last));
-    }, (e) => toast('GPS: ' + e.message), { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 });
-    this.wake();
-  },
-  stop(fn) {
-    if (fn) this.subs.delete(fn);
-    if (this.subs.size || this.wid == null) return;
-    navigator.geolocation.clearWatch(this.wid); this.wid = null;
-    this.lock?.release?.(); this.lock = null;
-  },
-  async wake() { try { this.lock = await navigator.wakeLock?.request('screen'); } catch {} },   // keep tracking while the screen is on
-  once() {
-    return new Promise((res) => {
-      if (this.last && Date.now() - this.last.t < 30000) return res(this.last);
-      if (!navigator.geolocation) return res(null);
-      navigator.geolocation.getCurrentPosition((p) => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: p.timestamp }), () => res(null), { enableHighAccuracy: true, timeout: 15000 });
-    });
-  },
-};
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Geo.wid != null) Geo.wake(); });
-// accept a fix into a track only if accurate and actually moved (filters GPS jitter & jumps)
-function pushTrack(track, f) {
-  if (f.acc > 60) return false;
-  const p = [+f.lat.toFixed(6), +f.lng.toFixed(6)], prev = track[track.length - 1];
-  if (prev) { const d = U.haversineKm(prev, p) * 1000; if (d < 8 || d > 3000) return false; }
-  track.push(p); return true;
-}
-
-// pre-select the state the phone is actually in (nearest centroid — a hint the user can change)
-async function suggestRegion(selId) {
-  const f = await Geo.once(); const sel = $(selId); if (!f || !sel) return;
-  const r = U.nearestRegion(f.lat, f.lng);
-  if (r && r !== sel.value && [...sel.options].some((o) => o.value === r)) { sel.value = r; toast('Region set from GPS: ' + regionName(r)); }
-}
-
-// ───────────────────────── outbox / sync (offline-first) ─────────────────────────
-const outbox = () => U.lsGet('hw_outbox', []);
-function queue(kind, payload) { const o = outbox().filter((x) => x.payload.id !== payload.id); o.push({ kind, payload }); U.durSet('hw_outbox', o); return syncNow(); }
-let syncing = false;
-async function syncNow() {
-  if (syncing || !S.me || S.me.guest) return paintSync();
-  syncing = true;
-  let o = outbox();
-  for (const item of [...o]) {
-    try {
-      item.kind === 'trip' ? await api.saveTrip(item.payload) : await api.saveRoadkill(item.payload);
-      o = o.filter((x) => x !== item); U.durSet('hw_outbox', o);
-    } catch (e) { console.warn('sync failed', e); if (!HW.isNetError(e)) toast('Sync failed: ' + e.message); break; }   // offline: retried automatically
-  }
-  syncing = false; paintSync();
-}
-// connectivity = outcome of the last real request (navigator.onLine is unreliable on phones)
-const isOnline = () => HW.net.ok && navigator.onLine !== false;
-function paintSync() {
-  const n = outbox().length, on = isOnline();
-  $('syncdot').className = 'dot ' + (!on ? 'off' : n ? 'pending' : '');
-  $('synctxt').textContent = S.me?.guest ? `${n} saved · sign in to upload` : !on ? `offline${n ? ' · ' + n + ' saved' : ''}` : n ? `${n} to sync` : HW.DEMO ? 'demo' : 'synced';
-}
-addEventListener('online', syncNow); addEventListener('offline', paintSync);
-addEventListener('hw-net', (e) => { paintSync(); if (e.detail) syncNow(); });
-setInterval(() => { if (outbox().length && document.visibilityState === 'visible') syncNow(); }, 60 * 1000);
-
-// ───────────────────────── navigation ─────────────────────────
-function show(v) {
-  S.view = v;
-  document.querySelectorAll('.view').forEach((x) => x.classList.toggle('on', x.id === 'v-' + v));
-  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
-  $('tabs').classList.toggle('hidden', v === 'auth');
-  document.body.classList.toggle('authing', v === 'auth');
-  ({ guide: renderGuide, identify: renderIdentify, record: renderRecord, roadkill: renderRoadkill, me: renderMe })[v]?.();
-  scrollTo(0, 0);
-}
-$('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.v); };
-$('region').onchange = async (e) => { S.region = e.target.value; U.lsSet('hw_region', S.region); await loadChecklist(); show(S.view); };
-
-// ═════════════════════════ GUIDE ═════════════════════════
-const FILTERS = [['venomous', 'Venomous'], ['poisonous', 'Poisonous'], ['threatened', 'Threatened (CR/EN/VU)'], ['endemic', 'Endemic'], ['unlocked', 'Unlocked']];
-function guideList() {
-  const cl = new Set(S.checklist), q = S.q.trim().toLowerCase(), f = S.filters;
-  return S.index.filter((s) => cl.has(s.id)
-    && (S.pack === 'all' || s.pack === S.pack)
-    && (!q || s.common.toLowerCase().includes(q) || s.sci.toLowerCase().includes(q) || (s.family || '').toLowerCase().includes(q))
-    && (!f.has('venomous') || s.venom === 'venomous') && (!f.has('poisonous') || s.toxic === 'poisonous')
-    && (!f.has('threatened') || ['CR', 'EN', 'VU'].includes(s.iucn)) && (!f.has('endemic') || s.endemic)
-    && (!f.has('unlocked') || isUnlocked(s.id)))
-    .sort((a, b) => S.packs.findIndex((p) => p.id === a.pack) - S.packs.findIndex((p) => p.id === b.pack) || a.common.localeCompare(b.common));
-}
-function renderGuide() {
-  $('packchips').innerHTML = [['all', 'All groups'], ...S.packs.map((p) => [p.id, p.name])]
-    .map(([id, l]) => `<button class="chip ${S.pack === id ? 'on' : ''}" data-p="${id}">${id === 'all' ? '' : dot(id)}${esc(l)}</button>`).join('');
-  $('filterchips').innerHTML = FILTERS.map(([id, l]) => `<button class="chip ${S.filters.has(id) ? 'on' : ''}" data-f="${id}">${esc(l)}</button>`).join('');
-  const list = guideList();
-  $('guidecount').textContent = `${list.length} species · checklist for ${regionName(S.region)}`;
-  $('splist').innerHTML = list.length ? list.map((s, i) => `<button class="card sp" style="--i:${i}" data-id="${s.id}"><div class="th">${thumb(s)}</div><div class="grow"><div class="nm">${esc(s.common)}</div><div class="sci"><i>${esc(s.sci)}</i> · ${esc(s.family)}</div><div class="pills">${pills(s)}</div></div></button>`).join('')
-    : `<div class="empty">No species match. ${S.checklist.length ? 'Try clearing filters.' : 'No checklist has been published for this region yet.'}</div>`;
-}
-$('packchips').onclick = (e) => { const b = e.target.closest('[data-p]'); if (b) { S.pack = b.dataset.p; renderGuide(); } };
-$('filterchips').onclick = (e) => { const b = e.target.closest('[data-f]'); if (b) { S.filters.has(b.dataset.f) ? S.filters.delete(b.dataset.f) : S.filters.add(b.dataset.f); renderGuide(); } };
-$('q').oninput = (e) => { S.q = e.target.value; renderGuide(); };
-$('splist').onclick = (e) => { const b = e.target.closest('[data-id]'); if (b) openSpecies(b.dataset.id); };
-
-function unlockOffer(pack) {
-  const isState = S.region.includes('-'), country = S.region.split('-')[0];
-  const opts = [];
-  try { if (isState) opts.push({ region: S.region, ...U.quoteFrom(S.prices, [{ pack, region: S.region }]) }); } catch {}
-  try { opts.push({ region: country, ...U.quoteFrom(S.prices, [{ pack, region: country }]) }); } catch {}
-  return `<div class="locked"><b class="row" style="gap:8px">${I('lock')} Unlock the ${esc(packOf(pack).name)} pack</b>
-    <p class="small muted" style="margin:4px 0 10px">Photos, identification notes, habitat, distribution and the Identify wizard for every species in the pack. Safety info (venomous / poisonous) is always free.</p>
-    <div class="row wrap">${opts.map((o) => `<button class="btn btn-primary btn-sm" data-buy="${pack}|${o.region}">${esc(regionName(o.region))} — ${U.rupees(o.total)}/yr</button>`).join('') || '<span class="small muted">No price set for this region yet.</span>'}</div></div>`;
-}
-document.addEventListener('click', (e) => {
-  const b = e.target.closest('[data-buy]'); if (!b) return;
-  const [pack, region] = b.dataset.buy.split('|'); openStore(region, [pack]);
-});
-
-function openSpecies(id) {
-  const s = byId(id); if (!s) return;
-  const f = S.unlocked[id];
-  const imgs = (f?.images || []).map((i) => (typeof i === 'string' ? { url: i } : i)).filter((i) => i.url);
-  const kv = (t, v) => (v ? `<div class="kv"><h4>${t}</h4><p>${esc(v)}</p></div>` : '');
-  const regions = (s.regions || []).filter((r) => r !== 'IN' && r.includes('-')).map(regionName);
-  openSheet(`
-    <div class="eyebrow">${dot(s.pack)} ${esc(packOf(s.pack).name)} · ${esc(s.family)}</div>
-    <h2 style="font-size:22px;margin-top:2px">${esc(s.common)}</h2>
-    <div class="sci" style="font-size:15px"><i>${esc(s.sci)}</i></div>
-    <div class="pills" style="margin-top:8px">${pills(s)}</div>
-    ${s.venom === 'venomous' ? `<div class="safety venom"><b>${I('triangle-alert')} Venomous: medically significant.</b> Do not handle. In case of a bite: keep the person still, remove rings/tight items, do not cut or suck the wound or apply a tourniquet, and go to the nearest hospital with anti-venom. Emergency: 108.</div>` : ''}
-    ${s.toxic === 'poisonous' ? `<div class="safety" style="background:#f3e3f7;color:#7b2d8e"><b>${I('skull')} Poisonous secretions.</b> Wash hands after contact; keep pets away.</div>` : ''}
-    ${f ? `
-      <div class="gallery">${imgs.length ? imgs.map((i) => `<img src="${esc(i.url)}" alt="${esc(s.common)}" title="${esc(i.credit || '')}">`).join('') : mono(s, true)}</div>
-      ${imgs.some((i) => i.credit) ? `<p class="tiny muted">Photos: ${imgs.map((i) => esc(i.credit || '')).filter(Boolean).join('; ')}</p>` : ''}
-      ${kv('Identification', f.id_notes)}${kv('Size', f.size)}${kv('Habitat', f.habitat)}${kv('Distribution', f.distribution)}
-      ${kv('Behaviour & notes', f.behaviour)}${kv('Similar species', f.similar)}
-      <div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)} (${esc(s.iucn)})</p></div>
-      <p class="small" style="margin-top:10px"><a href="feedback.html?species=${encodeURIComponent(s.id)}">${I('flag')} Report a mistake on this page</a></p>
-      ${regions.length ? `<div class="kv"><h4>Recorded in (checklists)</h4><p class="small">${regions.map(esc).join(' · ')}</p></div>` : ''}`
-    : `<div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)}</p></div>${unlockOffer(s.pack)}`}
-    <div class="row" style="margin-top:16px"><button class="btn btn-primary grow" id="sp-rec">${I('clipboard-list')} Record sighting</button><button class="btn btn-ghost grow" id="sp-rk">${I('route')} Log road-kill</button></div>`);
-  $('sp-rec').onclick = () => { closeSheet(); quickSighting(id); };
-  $('sp-rk').onclick = () => { closeSheet(); show('roadkill'); if (RK()) logRoadkill(s.pack, id); else toast('Start a road-kill survey first'); };
-}
-
-// ═════════════════════════ STORE (pick only the packs you want) ═════════════════════════
-function openStore(region = S.region, preselect = []) {
-  if (!S.me) return show('auth');
-  const owned = (pack, reg) => S.ents.some((e) => e.pack === pack && (e.region === reg || e.region === reg.split('-')[0]));
-  const render = (reg, picked) => {
-    const lines = S.packs.map((p) => { let q = null; try { q = U.quoteFrom(S.prices, [{ pack: p.id, region: reg }]); } catch {} return { p, q, own: owned(p.id, reg) }; });
-    const total = lines.filter((l) => picked.has(l.p.id) && l.q && !l.own).reduce((s, l) => s + l.q.total, 0);
-    openSheet(`<h2>Choose your packs</h2><p class="small muted" style="margin:4px 0 10px">Pay only for the groups you need. A state pack covers that state's checklist; the country pack covers all of it.</p>
-      <label class="f">Region</label><select id="st-reg"></select>
-      <div style="margin-top:12px">${lines.map(({ p, q, own }) => `<label class="storeitem ${own ? 'owned' : ''}"><input type="checkbox" data-sp="${p.id}" ${picked.has(p.id) && !own ? 'checked' : ''} ${own || !q ? 'disabled' : ''}>
-        <span class="gdot" style="--pc:${p.color};width:12px;height:12px"></span><span class="grow"><b>${esc(p.name)}</b><br><span class="small muted">${esc(p.blurb)}</span></span>
-        <span class="price">${own ? 'Owned' : q ? U.rupees(q.total) : '—'}</span></label>`).join('')}</div>
-      <div class="row" style="margin-top:10px"><b class="grow">Total <span class="price">${U.rupees(total)}</span> <span class="small muted">/ 1 year</span></b>
-      <button class="btn btn-primary" id="st-pay" ${total ? '' : 'disabled'}>${HW.DEMO ? 'Unlock (demo, free)' : 'Pay with Razorpay'}</button></div>
-      <p class="tiny muted" style="margin-top:8px">Payments are processed by Razorpay (UPI, cards, net-banking). Access is granted by our server once payment is confirmed.</p>`);
-    fillRegionSelect($('st-reg'), reg);
-    $('st-reg').onchange = (e) => render(e.target.value, picked);
-    $('sheetbody').querySelectorAll('[data-sp]').forEach((c) => (c.onchange = () => { c.checked ? picked.add(c.dataset.sp) : picked.delete(c.dataset.sp); render(reg, picked); }));
-    $('st-pay').onclick = async () => {
-      const items = [...picked].filter((p) => !owned(p, reg)).map((pack) => ({ pack, region: reg }));
-      $('st-pay').disabled = true; $('st-pay').textContent = 'Processing…';
-      try { await api.checkout(items); await loadUser(); closeSheet(); toast('Unlocked! Packs are now available offline.'); show(S.view); }
-      catch (e) { toast(e.message); render(reg, picked); }
-    };
-  };
-  render(region, new Set(preselect));
-}
-
-// ═════════════════════════ IDENTIFY (Merlin-style step-by-step) ═════════════════════════
-const COLORS = ['black', 'brown', 'tan', 'grey', 'olive', 'green', 'yellow', 'orange', 'red', 'blue', 'purple', 'pink', 'white'];
-const PATTERNS = { plain: 'Plain / uniform', banded: 'Bands or rings', spotted: 'Spots', blotched: 'Large blotches', striped: 'Stripes (lengthwise)', zigzag: 'Zig-zag', checkered: 'Checkered', warty: 'Warty skin', star: 'Star-patterned shell' };
-const TIMES = { day: ['sun', 'Day'], dusk: ['sunset', 'Dusk / dawn'], night: ['moon', 'Night'] };
-const IDF = { step: 0, pack: null, colors: new Set(), pattern: null, time: null };
-function renderIdentify() {
-  const el = $('idf'), st = IDF.step;
-  const bar = `<div class="steps">${[0, 1, 2, 3, 4].map((i) => `<i class="${i <= st ? 'on' : ''}"></i>`).join('')}</div>`;
-  const nav = (next = true) => `<div class="row" style="margin-top:16px">${st ? '<button class="btn btn-ghost" id="i-back">Back</button>' : ''}<span class="grow"></span>${next ? '<button class="btn btn-primary" id="i-next">Next</button>' : ''}</div>`;
-  if (st === 0) {
-    el.innerHTML = `${bar}<h2>What did you see?</h2><p class="small muted">Answer a few questions — we’ll list the most likely species in ${esc(regionName(S.region))}.</p>
-      <div class="grid2" style="margin-top:12px">${S.packs.map((p) => `<button class="opt ${IDF.pack === p.id ? 'on' : ''}" data-ip="${p.id}"><span class="e" style="--pc:${p.color}"></span>${esc(p.name)}</button>`).join('')}</div>`;
-    el.querySelectorAll('[data-ip]').forEach((b) => (b.onclick = () => { IDF.pack = b.dataset.ip; IDF.step = 1; renderIdentify(); }));
-    return;
-  }
-  const cl = new Set(S.checklist);
-  const inPack = S.index.filter((s) => s.pack === IDF.pack && cl.has(s.id));
-  const pool = inPack.filter((s) => isUnlocked(s.id)).map((s) => ({ ...s, traits: S.unlocked[s.id].traits || {} }));
-  if (!pool.length) {
-    el.innerHTML = `${bar}<h2>${esc(packOf(IDF.pack).name)}</h2>
-      <p class="muted small">${inPack.length} species on the ${esc(regionName(S.region))} checklist.</p>${unlockOffer(IDF.pack)}${nav(false)}`;
-  } else if (st === 1) {
-    const avail = new Set(pool.flatMap((s) => s.traits.color || []));
-    el.innerHTML = `${bar}<h2>Main colours?</h2><p class="small muted">Pick all that apply (or skip).</p>
-      <div class="chips wrap" style="flex-wrap:wrap;margin-top:10px">${COLORS.filter((c) => avail.has(c)).map((c) => `<button class="chip ${IDF.colors.has(c) ? 'on' : ''}" data-c="${c}">${c}</button>`).join('')}</div>${nav()}`;
-    el.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => { IDF.colors.has(b.dataset.c) ? IDF.colors.delete(b.dataset.c) : IDF.colors.add(b.dataset.c); renderIdentify(); }));
-  } else if (st === 2) {
-    const avail = new Set(pool.map((s) => s.traits.pattern));
-    el.innerHTML = `${bar}<h2>Pattern?</h2><div class="grid2" style="margin-top:10px">${Object.entries(PATTERNS).filter(([k]) => avail.has(k)).map(([k, l]) => `<button class="opt ${IDF.pattern === k ? 'on' : ''}" data-pt="${k}">${esc(l)}</button>`).join('')}</div>${nav()}`;
-    el.querySelectorAll('[data-pt]').forEach((b) => (b.onclick = () => { IDF.pattern = IDF.pattern === b.dataset.pt ? null : b.dataset.pt; renderIdentify(); }));
-  } else if (st === 3) {
-    el.innerHTML = `${bar}<h2>When did you see it?</h2><div class="grid2" style="margin-top:10px">${Object.entries(TIMES).map(([k, [ic, l]]) => `<button class="opt ${IDF.time === k ? 'on' : ''}" data-t="${k}">${I(ic)}${l}</button>`).join('')}</div>${nav()}`;
-    el.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { IDF.time = IDF.time === b.dataset.t ? null : b.dataset.t; renderIdentify(); }));
-  } else {
-    const scored = pool.map((s) => {
-      const t = s.traits; let sc = 0;
-      IDF.colors.forEach((c) => { if ((t.color || []).includes(c)) sc += 2; });
-      if (IDF.pattern && t.pattern === IDF.pattern) sc += 3;
-      if (IDF.time && (t.time === IDF.time || t.time === 'any' || (IDF.time === 'dusk' && t.time === 'night'))) sc += 1;
-      return { s, sc };
-    }).sort((a, b) => b.sc - a.sc);
-    const max = Math.max(1, IDF.colors.size * 2 + (IDF.pattern ? 3 : 0) + (IDF.time ? 1 : 0));
-    el.innerHTML = `${bar}<h2>Most likely matches</h2><p class="small muted">Ranked by your answers. Always confirm with the ID notes — never handle a snake to identify it.</p>
-      <div class="splist" style="margin-top:10px">${scored.slice(0, 8).map(({ s, sc }) => `<button class="card sp" data-id="${s.id}"><div class="th">${thumb(s)}</div><div class="grow"><div class="nm">${esc(s.common)}</div><div class="sci"><i>${esc(s.sci)}</i></div><div class="pills">${pills(s)}<span class="pill lock">${Math.round((sc / max) * 100)}% match</span></div></div></button>`).join('')}</div>
-      <div class="row" style="margin-top:14px"><button class="btn btn-ghost" id="i-back">Back</button><span class="grow"></span><button class="btn btn-ghost" id="i-reset">Start over</button></div>`;
-    el.querySelector('.splist').onclick = (e) => { const b = e.target.closest('[data-id]'); if (b) openSpecies(b.dataset.id); };
-    $('i-reset').onclick = () => { Object.assign(IDF, { step: 0, pack: null, colors: new Set(), pattern: null, time: null }); renderIdentify(); };
-  }
-  $('i-back') && ($('i-back').onclick = () => { IDF.step--; renderIdentify(); });
-  $('i-next') && ($('i-next').onclick = () => { IDF.step++; renderIdentify(); });
-}
-
-// ═════════════════════════ RECORD — eBird-style checklist ═════════════════════════
-const TRIP = () => U.lsGet('hw_trip', null);
-const saveTripState = (t) => U.durSet('hw_trip', t);
-const PROTOCOLS = { incidental: 'Incidental (no effort)', stationary: 'Stationary point count', traveling: 'Traveling transect', night_walk: 'Night walk / VES', area: 'Area search' };
-let tripTimer = null, recFilter = '';
-function onTripFix(f) { const t = TRIP(); if (!t) return; if (t.protocol !== 'stationary' && pushTrack(t.track, f)) saveTripState(t); paintTripStats(); }
-
-function renderRecord() {
-  const t = TRIP(), el = $('rec');
-  clearInterval(tripTimer);
-  if (!S.me) return show('auth');
-  if (!t) {
-    el.innerHTML = `<div class="card pad"><div class="eyebrow">New checklist</div><h2 style="margin:2px 0 8px">Start recording</h2>
-      <label class="f">Protocol</label><select id="r-proto">${Object.entries(PROTOCOLS).map(([k, l]) => `<option value="${k}" ${k === 'traveling' ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <div class="grid2"><div><label class="f">Observers</label><input id="r-obs" type="number" min="1" value="1"></div>
-      <div><label class="f">Region</label><select id="r-reg"></select></div></div>
-      <button class="btn btn-primary btn-block" id="r-start" style="margin-top:14px">${I('play')} Start checklist</button>
-      <p class="tiny muted" style="margin-top:8px">The timer, GPS track and distance are recorded automatically. Works offline — it syncs when you’re back online.</p></div>
-      <h3 style="margin:18px 0 8px">My recent checklists</h3><div id="r-hist" class="small muted">Loading…</div>`;
-    fillRegionSelect($('r-reg'), S.region); suggestRegion('r-reg');
-    $('r-start').onclick = async () => {
-      const proto = $('r-proto').value, t = { id: U.uid(), protocol: proto, observers: +$('r-obs').value || 1, region_code: $('r-reg').value, started_at: new Date().toISOString(), track: [], items: {}, notes: '' };
-      saveTripState(t);
-      if (proto !== 'incidental') Geo.start(onTripFix);
-      const f = await Geo.once(); if (f) { const t2 = TRIP(); t2.lat = f.lat; t2.lng = f.lng; if (proto !== 'stationary') pushTrack(t2.track, f); saveTripState(t2); }
-      renderRecord();
-    };
-    loadHistory('r-hist');
-    return;
-  }
-  if (t.protocol !== 'incidental') Geo.start(onTripFix);
-  const cl = new Set(U.lsGet('hw_cl_' + t.region_code, null) || S.checklist);
-  const list = S.index.filter((s) => cl.has(s.id) && (!recFilter || (s.common + ' ' + s.sci).toLowerCase().includes(recFilter.toLowerCase())));
-  const extras = Object.values(t.items).filter((x) => !x.species_id);
-  el.innerHTML = `<div class="card pad">
-      <div class="row"><div class="grow"><div class="eyebrow">${esc(PROTOCOLS[t.protocol])}</div><b>${esc(regionName(t.region_code))}</b></div>
-      <button class="btn btn-ghost btn-sm" id="r-map">Map</button></div>
-      <div class="statbar"><div class="stat"><b id="ts-time">0:00</b><span>time</span></div><div class="stat"><b id="ts-km">0.00</b><span>km</span></div>
-      <div class="stat"><b id="ts-sp">0</b><span>species</span></div><div class="stat"><b id="ts-gps">—</b><span>GPS ±m</span></div></div>
-      <div class="search" style="margin:0"><input id="r-q" type="search" placeholder="Filter checklist…" value="${esc(recFilter)}"></div></div>
-    <div class="card" style="margin-top:10px;overflow:hidden">
-      ${extras.map((x) => recRow(x.key, `${esc(x.species_text)} <span class="small muted">(${esc(packOf(x.pack).name)}, unlisted)</span>`, x.count)).join('')}
-      ${list.map((s) => recRow(s.id, `${nameHtml(s)}${s.venom === 'venomous' ? ' <span class="pill venom" title="Venomous">' + I('triangle-alert') + '</span>' : ''}`, t.items[s.id]?.count || 0)).join('') || '<div class="empty">No species in this checklist.</div>'}
-      <div class="pad"><button class="btn btn-ghost btn-block" id="r-other">+ Add unlisted / unidentified</button></div></div>
-    <label class="f">Checklist notes</label><textarea id="r-notes" placeholder="Weather, habitat, observers…">${esc(t.notes || '')}</textarea>
-    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="r-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="r-submit">${I('check')} Submit checklist</button></div>`;
-  paintTripStats(); tripTimer = setInterval(paintTripStats, 1000);
-  $('r-q').oninput = (e) => { recFilter = e.target.value; const pos = e.target.selectionStart; renderRecord(); const q = $('r-q'); q.focus(); q.setSelectionRange(pos, pos); };
-  $('r-notes').onchange = (e) => { const t = TRIP(); t.notes = e.target.value; saveTripState(t); };
-  $('r-other').onclick = () => otherSheet();
-  $('r-map').onclick = () => { const t = TRIP(); openSheet('<h3>Checklist track</h3><div id="tripmap"></div>'); setTimeout(() => drawMap('tripmap', t.track, Object.values(t.items).filter((x) => x.lat).map((x) => ({ lat: x.lat, lng: x.lng, label: x.species_text || byId(x.species_id)?.common }))), 260); };
-  $('r-discard').onclick = () => { if (confirm('Discard this checklist? Nothing will be saved.')) { U.durSet('hw_trip', null); Geo.stop(onTripFix); renderRecord(); } };
-  $('r-submit').onclick = submitTrip;
-  el.querySelectorAll('[data-inc]').forEach((b) => (b.onclick = () => bump(b.dataset.inc, +b.dataset.d)));
-  el.querySelectorAll('[data-det]').forEach((b) => (b.onclick = () => detailSheet(b.dataset.det)));
-}
-const recRow = (key, label, n) => `<div class="rec-row ${n ? 'has' : ''}"><button class="grow" style="text-align:left" data-det="${esc(key)}">${label}</button>
-  <span class="cnt"><button data-inc="${esc(key)}" data-d="-1" aria-label="minus">−</button><span class="n">${n || ''}</span><button class="plus" data-inc="${esc(key)}" data-d="1" aria-label="plus">+</button></span></div>`;
-function paintTripStats() {
-  const t = TRIP(); if (!t || !$('ts-time')) return;
-  const sec = Math.floor((Date.now() - new Date(t.started_at)) / 1000);
-  $('ts-time').textContent = `${Math.floor(sec / 3600) ? Math.floor(sec / 3600) + ':' : ''}${String(Math.floor(sec / 60) % 60).padStart(Math.floor(sec / 3600) ? 2 : 1, '0')}:${String(sec % 60).padStart(2, '0')}`;
-  $('ts-km').textContent = U.trackKm(t.track).toFixed(2);
-  $('ts-sp').textContent = Object.values(t.items).filter((x) => x.count > 0).length;
-  $('ts-gps').textContent = Geo.last ? Math.round(Geo.last.acc) : '—';
-}
-function newItem(key, extra = {}) {
-  const f = Geo.last;
-  return { key, id: U.uid(), species_id: byId(key) ? key : null, species_text: '', count: 0, observed_at: new Date().toISOString(), lat: f?.lat ?? null, lng: f?.lng ?? null, accuracy_m: f?.acc ?? null, life_stage: '', sex: '', notes: '', photos: [], ...extra };
-}
-function bump(key, d) {
-  const t = TRIP(); const it = t.items[key] || newItem(key);
-  it.count = Math.max(0, it.count + d);
-  if (it.count === 0 && it.species_id && !it.notes && !it.photos.length) delete t.items[key]; else t.items[key] = it;
-  saveTripState(t); renderRecord();
-}
-function detailSheet(key, after) {
-  const t = TRIP(); const it = t.items[key] || newItem(key, { count: 1 }); const s = byId(key);
-  openSheet(`<h3>${s ? nameHtml(s) : esc(it.species_text)}</h3>
-    <div class="grid2"><div><label class="f">Count</label><input id="d-n" type="number" min="0" value="${it.count || 1}"></div>
-    <div><label class="f">Life stage</label><select id="d-ls">${['', 'adult', 'juvenile', 'hatchling', 'subadult', 'egg / clutch', 'tadpole', 'metamorph', 'shed skin'].map((v) => `<option ${v === it.life_stage ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
-    <label class="f">Sex</label><select id="d-sex">${['', 'male', 'female', 'mixed', 'unknown'].map((v) => `<option ${v === it.sex ? 'selected' : ''}>${v}</option>`).join('')}</select>
-    <label class="f">Notes (behaviour, microhabitat, ID features)</label><textarea id="d-notes">${esc(it.notes)}</textarea>
-    <label class="f">Photos</label><input id="d-ph" type="file" accept="image/*" capture="environment" multiple>
-    <div class="row wrap" id="d-thumbs" style="margin-top:6px">${it.photos.map((p) => `<img src="${esc(p)}" style="width:64px;height:64px;object-fit:cover;border-radius:8px">`).join('')}</div>
-    <p class="small muted row wrap" style="margin-top:8px;gap:6px">${I('map-pin')} ${it.lat != null ? `${it.lat.toFixed(5)}, ${it.lng.toFixed(5)} (±${Math.round(it.accuracy_m || 0)} m)` : 'no location yet'} <button class="btn btn-ghost btn-sm" id="d-pin">Use current location</button></p>
-    <button class="btn btn-primary btn-block" id="d-save" style="margin-top:12px">Save</button>`);
-  $('d-pin').onclick = async () => { const f = await Geo.once(); if (!f) return toast('No GPS fix'); Object.assign(it, { lat: f.lat, lng: f.lng, accuracy_m: f.acc }); toast('Location updated'); };
-  $('d-ph').onchange = async (e) => {
-    for (const file of e.target.files) { try { it.photos.push(await U.processPhoto(file)); } catch (er) { toast('Photo failed: ' + er.message); } }
-    $('d-thumbs').innerHTML = it.photos.map((p) => `<img src="${esc(p)}" style="width:64px;height:64px;object-fit:cover;border-radius:8px">`).join('');
-  };
-  $('d-save').onclick = () => {
-    Object.assign(it, { count: Math.max(0, +$('d-n').value || 0), life_stage: $('d-ls').value, sex: $('d-sex').value, notes: $('d-notes').value });
-    const t2 = TRIP(); t2.items[key] = it; saveTripState(t2); closeSheet(); (after || renderRecord)();
-  };
-}
-function otherSheet() {
-  openSheet(`<h3>Unlisted or unidentified</h3>
-    <label class="f">Group</label><select id="o-pack">${S.packs.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
-    <label class="f">Name / description</label><input id="o-name" placeholder="e.g. Unidentified skink, Lycodon sp.">
-    <label class="f">Count</label><input id="o-n" type="number" min="1" value="1">
-    <button class="btn btn-primary btn-block" id="o-add" style="margin-top:12px">Add</button>`);
-  $('o-add').onclick = () => {
-    const name = $('o-name').value.trim(); if (!name) return toast('Give it a name or description');
-    const t = TRIP(), key = 'x-' + U.uid().slice(0, 8);
-    t.items[key] = newItem(key, { species_text: name, pack: $('o-pack').value, count: +$('o-n').value || 1 });
-    saveTripState(t); closeSheet(); renderRecord();
-  };
-}
-function tripPayload(t) {
-  const end = new Date();
-  return {
-    id: t.id, region_code: t.region_code, protocol: t.protocol, started_at: t.started_at, ended_at: end.toISOString(),
-    duration_min: Math.round((end - new Date(t.started_at)) / 60000), distance_km: +U.trackKm(t.track).toFixed(2),
-    observers: t.observers, complete: !!t.complete, track: t.track, lat: t.lat ?? null, lng: t.lng ?? null, notes: t.notes || '',
-    sightings: Object.values(t.items).filter((x) => x.count > 0).map(({ key, pack, ...x }) => ({ ...x, region_code: t.region_code })),
-  };
-}
-async function submitTrip() {
-  const t = TRIP(); const n = Object.values(t.items).filter((x) => x.count > 0).length;
-  if (!n && !confirm('No species recorded. Submit an empty checklist?')) return;
-  t.complete = t.protocol !== 'incidental' && confirm('Are you reporting ALL species you could detect and identify?\n\nOK = complete checklist · Cancel = only some species');
-  U.durSet('hw_trip', null); Geo.stop(onTripFix); recFilter = '';
-  await queue('trip', tripPayload(t));
-  toast(`Checklist saved — ${n} species`); renderRecord();
-}
-// one-tap incidental sighting from the guide
-async function quickSighting(id) {
-  if (!S.me) return show('auth');
-  if (TRIP()) { show('record'); bump(id, 1); return toast('Added to your open checklist'); }
-  const f = await Geo.once();
-  const t = { id: U.uid(), protocol: 'incidental', observers: 1, region_code: S.region, started_at: new Date().toISOString(), track: [], items: {}, notes: '', lat: f?.lat, lng: f?.lng };
-  saveTripState(t); show('record'); detailSheet(id, () => { const t2 = TRIP(); queue('trip', tripPayload(t2)); U.durSet('hw_trip', null); toast('Sighting saved'); renderRecord(); });
-}
-async function loadHistory(elId) {
-  const el = $(elId); if (!el) return;
-  const pend = outbox();
-  let trips = [], surveys = [];
-  try { [trips, surveys] = await Promise.all([api.myTrips(), api.mySurveys()]); } catch { el.innerHTML = 'Offline — history shows when you reconnect.'; }
-  const isRk = elId === 'k-hist';
-  const rows = isRk ? surveys.map((s) => `<div class="card pad" style="margin-bottom:8px"><b>${esc(s.road_name || 'Survey')}</b> <span class="small muted">${new Date(s.started_at).toLocaleString()}</span><div class="small">${s.distance_km} km · ${(s.records || []).length} records · ${esc(regionName(s.region_code))}</div></div>`)
-    : trips.map((t) => {
-        const sg = t.sightings || [], c = (st) => sg.filter((x) => x.review_status === st).length;
-        const rej = sg.filter((x) => x.review_status === 'rejected');
-        return `<div class="card pad" style="margin-bottom:8px"><b>${esc(PROTOCOLS[t.protocol] || t.protocol)}</b> <span class="small muted">${new Date(t.started_at).toLocaleString()}</span>
-          <div class="small">${sg.length} species · ${t.duration_min ?? 0} min · ${t.distance_km ?? 0} km · ${esc(regionName(t.region_code))}${t.complete ? ' · complete' : ''}</div>
-          ${sg.length ? `<div class="pills" style="margin-top:6px">${c('accepted') ? `<span class="pill safe">${I('check')} ${c('accepted')} accepted</span>` : ''}${c('pending') ? `<span class="pill lock">${c('pending')} awaiting review</span>` : ''}${c('rejected') ? `<span class="pill venom">${c('rejected')} not accepted</span>` : ''}</div>` : ''}
-          ${rej.map((x) => `<div class="tiny" style="margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--red-soft)"><b>${esc(byId(x.species_id)?.common || x.species_text || 'Record')}</b>: ${esc(x.review_note || 'not accepted by the reviewer')}</div>`).join('')}
-        </div>`;
-      });
-  const queued = pend.filter((p) => p.kind === (isRk ? 'survey' : 'trip')).length;
-  el.innerHTML = (queued ? `<p class="small" style="margin-bottom:8px">⏳ ${queued} waiting to sync</p>` : '') + (rows.join('') || '<div class="empty">Nothing yet.</div>');
-}
-
-// ═════════════════════════ ROAD-KILL LOGGER (track + points) ═════════════════════════
-const RK = () => U.lsGet('hw_rk', null);
-const saveRk = (r) => U.durSet('hw_rk', r);
-let rkMap = null, rkLine = null, rkLayer = null, rkMe = null, rkTimer = null;
-function onRkFix(f) {
-  const r = RK(); if (!r) return;
-  if (pushTrack(r.track, f)) saveRk(r);
-  if (rkMap) { rkLine.setLatLngs(r.track); rkMe.setLatLng([f.lat, f.lng]); if (!rkMap.hwUserPanned) rkMap.setView([f.lat, f.lng], Math.max(rkMap.getZoom(), 15)); }
-  paintRkStats();
-}
-function drawMap(elId, track, pts, fit = true) {
-  if (!window.L) { const el = $(elId); if (el) el.innerHTML = '<div class="empty small">Map unavailable offline — GPS track is still being recorded.</div>'; return {}; }
-  const m = L.map(elId, { zoomControl: true, attributionControl: true });
-  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(m);
-  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
-  L.control.layers({ Map: osm, Satellite: sat }).addTo(m);
-  const line = L.polyline(track || [], { color: '#2f7d4f', weight: 4 }).addTo(m);
-  const layer = L.layerGroup().addTo(m);
-  (pts || []).forEach((p) => L.circleMarker([p.lat, p.lng], { radius: 7, color: '#fff', weight: 2, fillColor: p.color || '#c53030', fillOpacity: 1 }).bindPopup(esc(p.label || '')).addTo(layer));
-  const all = [...(track || []), ...(pts || []).map((p) => [p.lat, p.lng])];
-  if (fit && all.length > 1) m.fitBounds(all, { padding: [20, 20] }); else if (all.length) m.setView(all[0], 15); else m.setView(HW.CENTROIDS[S.region] || [20, 79], 7);
-  return { m, line, layer };
-}
-function renderRoadkill() {
-  const el = $('rk'), r = RK();
-  clearInterval(rkTimer); if (rkMap) { rkMap.remove(); rkMap = null; }
-  if (!S.me) return show('auth');
-  if (!r) {
-    el.innerHTML = `<div class="card pad"><div class="eyebrow">Road-kill data logger</div><h2 style="margin:2px 0 4px">Start a road survey</h2>
-      <p class="small muted">Drive, ride or walk a road. The app records your GPS track (survey effort) and you drop a point for every road-killed animal. Results are reported as kills per 100 km.</p>
-      <div class="grid2"><div><label class="f">Travel mode</label><select id="k-mode"><option value="car">Car</option><option value="motorbike">Motorbike</option><option value="bicycle">Bicycle</option><option value="walk">On foot</option><option value="other">Other</option></select></div>
-      <div><label class="f">Road type</label><select id="k-type"><option>highway</option><option>state road</option><option>district road</option><option>village road</option><option>forest road</option><option>unpaved track</option></select></div></div>
-      <label class="f">Road name / number</label><input id="k-road" placeholder="e.g. NH 4 Andaman Trunk Road">
-      <label class="f">Region</label><select id="k-reg"></select>
-      <button class="btn btn-red btn-block" id="k-start" style="margin-top:14px">${I('play')} Start survey &amp; track</button>
-      <p class="tiny muted" style="margin-top:8px">Keep the screen on while driving (the app requests a wake-lock). For screen-off background tracking use the installed Android app. Never use the phone while driving — have a passenger log records.</p></div>
-      <h3 style="margin:18px 0 8px">My road surveys</h3><div id="k-hist" class="small muted">Loading…</div>`;
-    fillRegionSelect($('k-reg'), S.region); suggestRegion('k-reg');
-    $('k-start').onclick = () => {
-      saveRk({ id: U.uid(), mode: $('k-mode').value, road_type: $('k-type').value, road_name: $('k-road').value.trim(), region_code: $('k-reg').value, started_at: new Date().toISOString(), track: [], records: [], notes: '' });
-      Geo.start(onRkFix); renderRoadkill();
-    };
-    loadHistory('k-hist');
-    return;
-  }
-  Geo.start(onRkFix);
-  el.innerHTML = `<div class="card pad"><div class="row"><div class="grow"><div class="eyebrow">Survey in progress · ${esc(r.mode)}</div><b>${esc(r.road_name || 'Unnamed road')}</b> <span class="small muted">${esc(regionName(r.region_code))}</span></div></div>
-      <div class="statbar"><div class="stat"><b id="ks-time">0:00</b><span>time</span></div><div class="stat"><b id="ks-km">0.00</b><span>km</span></div><div class="stat"><b id="ks-n">0</b><span>records</span></div><div class="stat"><b id="ks-rate">0</b><span>/100 km</span></div></div>
-      <div id="rkmap"></div>
-      <button class="bigbtn row" style="justify-content:center;gap:10px" id="k-log">${I('map-pin')} Log road-kill here</button></div>
-    <div class="card" style="margin-top:10px" id="k-list"></div>
-    <label class="f">Survey notes</label><textarea id="k-notes" placeholder="Traffic, weather, verge habitat…">${esc(r.notes)}</textarea>
-    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="k-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="k-stop">${I('square')} Stop &amp; save</button></div>`;
-  ({ m: rkMap, line: rkLine, layer: rkLayer } = drawMap('rkmap', r.track, [], false));
-  if (rkMap) rkMe = L.circleMarker(Geo.last ? [Geo.last.lat, Geo.last.lng] : (HW.CENTROIDS[r.region_code] || [20, 79]), { radius: 8, color: '#fff', weight: 3, fillColor: '#2b6cb0', fillOpacity: 1 }).addTo(rkMap);
-  rkMap?.on('dragstart', () => (rkMap.hwUserPanned = true));
-  paintRkList(); paintRkStats(); rkTimer = setInterval(paintRkStats, 1000);
-  $('k-log').onclick = () => logRoadkill();
-  $('k-notes').onchange = (e) => { const r = RK(); r.notes = e.target.value; saveRk(r); };
-  $('k-discard').onclick = () => { if (confirm('Discard this survey and all its records?')) { U.durSet('hw_rk', null); Geo.stop(onRkFix); renderRoadkill(); } };
-  $('k-stop').onclick = async () => {
-    const r = RK(), km = U.trackKm(r.track);
-    if (!confirm(`Finish survey?\n${km.toFixed(2)} km · ${r.records.length} records`)) return;
-    const { records, ...sv } = r;
-    U.durSet('hw_rk', null); Geo.stop(onRkFix);
-    await queue('survey', { ...sv, ended_at: new Date().toISOString(), distance_km: +km.toFixed(2), records: records.map((x) => ({ ...x, region_code: r.region_code })) });
-    toast('Survey saved'); renderRoadkill();
-  };
-}
-function paintRkStats() {
-  const r = RK(); if (!r || !$('ks-time')) return;
-  const sec = Math.floor((Date.now() - new Date(r.started_at)) / 1000), km = U.trackKm(r.track), n = r.records.reduce((s, x) => s + x.count, 0);
-  $('ks-time').textContent = `${Math.floor(sec / 3600)}:${String(Math.floor(sec / 60) % 60).padStart(2, '0')}`;
-  $('ks-km').textContent = km.toFixed(2); $('ks-n').textContent = n; $('ks-rate').textContent = km > 0.1 ? ((n / km) * 100).toFixed(1) : '—';
-}
-function paintRkList() {
-  const r = RK(); if (!r) return;
-  rkLayer?.clearLayers();
-  if (rkLayer) r.records.forEach((x) => L.circleMarker([x.lat, x.lng], { radius: 7, color: '#fff', weight: 2, fillColor: packOf(x.pack).color, fillOpacity: 1 }).bindPopup(esc(byId(x.species_id)?.common || x.species_text || packOf(x.pack).name)).addTo(rkLayer));
-  $('k-list').innerHTML = r.records.length ? r.records.slice().reverse().map((x) => `<div class="rec-row">${dot(x.pack)}<div class="grow"><b>${esc(byId(x.species_id)?.common || x.species_text || 'Unidentified ' + packOf(x.pack).name.toLowerCase())}</b> ×${x.count}
-      <div class="tiny muted">${new Date(x.observed_at).toLocaleTimeString()} · ${esc(x.condition)} · ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}</div></div><button class="btn btn-ghost btn-sm" data-delrk="${x.id}" aria-label="Delete record">${I('trash-2')}</button></div>`).join('')
-    : '<div class="empty small">No records yet. Tap “Road-kill here” at each carcass.</div>';
-  $('k-list').querySelectorAll('[data-delrk]').forEach((b) => (b.onclick = () => { const r = RK(); r.records = r.records.filter((x) => x.id !== b.dataset.delrk); saveRk(r); paintRkList(); paintRkStats(); }));
-}
-async function logRoadkill(presetPack, presetSpecies) {
-  const f = Geo.last && Date.now() - Geo.last.t < 30000 ? Geo.last : await Geo.once();
-  const pos = f ? { lat: f.lat, lng: f.lng, acc: f.acc } : rkMap ? { ...rkMap.getCenter(), acc: null } : null;
-  if (!pos) return toast('No location — wait for GPS');
-  let pack = presetPack || S.packs[0]?.id, cond = 'fresh', side = '';
-  const r = RK(), cl = new Set(U.lsGet('hw_cl_' + r.region_code, null) || S.checklist);
-  const draw = () => {
-    const sp = S.index.filter((s) => s.pack === pack && cl.has(s.id)).sort((a, b) => a.common.localeCompare(b.common));
-    openSheet(`<h3>Road-kill record</h3><p class="tiny muted row" style="gap:6px">${I('map-pin')} ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} ${pos.acc ? '(±' + Math.round(pos.acc) + ' m)' : '(map centre — no GPS)'}</p>
-      <label class="f">Group *</label><div class="chips">${S.packs.map((p) => `<button class="chip ${p.id === pack ? 'on' : ''}" data-kp="${p.id}">${dot(p.id)}${esc(p.name)}</button>`).join('')}</div>
-      <label class="f">Species</label><select id="kr-sp"><option value="">Unidentified ${esc(packOf(pack).name.toLowerCase())}</option>${sp.map((s) => `<option value="${s.id}" ${s.id === presetSpecies ? 'selected' : ''}>${esc(s.common)} (${esc(s.sci)})</option>`).join('')}<option value="__other">Other (type name)…</option></select>
-      <input id="kr-txt" class="hidden" placeholder="Species name" style="margin-top:6px">
-      <div class="grid2"><div><label class="f">Count</label><input id="kr-n" type="number" min="1" value="1"></div>
-      <div><label class="f">Position on road</label><select id="kr-side">${['', 'left lane', 'right lane', 'centre', 'verge / shoulder'].map((v) => `<option ${v === side ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>
-      <label class="f">Carcass condition</label><div class="chips">${['fresh', 'flattened', 'decomposed', 'dried'].map((c) => `<button class="chip ${c === cond ? 'on' : ''}" data-kc="${c}">${c}</button>`).join('')}</div>
-      <label class="f">Photo</label><input id="kr-ph" type="file" accept="image/*" capture="environment">
-      <label class="f">Notes</label><input id="kr-notes" placeholder="Optional">
-      <button class="btn btn-red btn-block" id="kr-save" style="margin-top:12px">Save record</button>`);
-    $('sheetbody').querySelectorAll('[data-kp]').forEach((b) => (b.onclick = () => { pack = b.dataset.kp; presetSpecies = null; draw(); }));
-    $('sheetbody').querySelectorAll('[data-kc]').forEach((b) => (b.onclick = () => { cond = b.dataset.kc; $('sheetbody').querySelectorAll('[data-kc]').forEach((x) => x.classList.toggle('on', x === b)); }));
-    $('kr-sp').onchange = (e) => $('kr-txt').classList.toggle('hidden', e.target.value !== '__other');
-    $('kr-side').onchange = (e) => (side = e.target.value);
-    $('kr-save').onclick = async () => {
-      const v = $('kr-sp').value, photos = [];
-      if ($('kr-ph').files[0]) { try { photos.push(await U.processPhoto($('kr-ph').files[0])); } catch (e) { toast('Photo failed: ' + e.message); } }
-      const r = RK();
-      r.records.push({ id: U.uid(), species_id: v && v !== '__other' ? v : null, species_text: v === '__other' ? $('kr-txt').value.trim() : '', pack, count: Math.max(1, +$('kr-n').value || 1),
-        lat: pos.lat, lng: pos.lng, accuracy_m: pos.acc, observed_at: new Date().toISOString(), condition: cond, side, notes: $('kr-notes').value, photos });
-      saveRk(r); closeSheet(); paintRkList(); paintRkStats(); toast('Road-kill logged');
-    };
-  };
-  draw();
-}
-
-// ═════════════════════════ ME ═════════════════════════
-async function renderMe() {
-  const el = $('me'), me = S.me;
-  if (!me) return show('auth');
-  const ents = S.ents;
-  if (me.guest) {
-    const n = outbox().length + (TRIP() ? 1 : 0) + (RK() ? 1 : 0);
-    el.innerHTML = `<div class="card pad"><h3 class="row" style="gap:8px">${I('cloud-off')} Recording offline</h3>
-      <p class="small muted" style="margin:6px 0 12px">${n} record(s) are saved on this device (in three separate stores, so a browser clean-up won’t lose them). Sign in when you have signal; they upload to your account automatically.</p>
-      <button class="btn btn-primary btn-block" id="m-signin">${I('user')} Sign in to upload</button></div>
-      <a class="card pad row" href="feedback.html" style="margin-top:10px;gap:12px;text-decoration:none;color:inherit">${I('mail')}<span class="grow"><b>Send feedback</b><span class="small muted" style="display:block">Rate the app or report a mistake</span></span>${I('chevron-right')}</a>`;
-    $('m-signin').onclick = () => { show('auth'); paintAuthHints(); };
-    return;
-  }
-  el.innerHTML = `<div class="card pad"><div class="row"><div style="width:48px;height:48px;border-radius:50%;background:var(--forest-2);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px">${esc((me.full_name || me.username || '?')[0].toUpperCase())}</div>
-      <div class="grow"><b>${esc(me.full_name || me.username)}</b><div class="small muted">@${esc(me.username)} · ${esc(me.email || '')}</div></div>${me.role === 'admin' || me.role === 'reviewer' ? `<a class="btn btn-ghost btn-sm" href="dashboard/">${I('layout-dashboard')} Dashboard</a>` : ''}</div></div>
-    <div class="card pad" style="margin-top:10px"><div class="row"><h3 class="grow">My packs</h3><button class="btn btn-primary btn-sm" id="m-store">Buy packs</button></div>
-      ${ents.length ? ents.map((e) => `<div class="rec-row">${dot(e.pack)}<div class="grow"><b>${esc(packOf(e.pack).name)}</b> · ${esc(regionName(e.region))}<div class="tiny muted">${e.valid_until ? 'valid until ' + new Date(e.valid_until).toLocaleDateString() : 'lifetime'} · ${esc(e.source)}</div></div></div>`).join('')
-        : '<p class="small muted" style="margin-top:6px">No packs yet. The species list, safety info and recording are free; packs unlock photos, ID notes and the Identify wizard.</p>'}
-      <p class="tiny muted" style="margin-top:6px">${Object.keys(S.unlocked).length} species downloaded for offline use.</p></div>
-    <div class="card pad row" data-install style="margin-top:10px;gap:14px;cursor:pointer">
-      <img src="assets/icon-192.png" alt="" width="44" height="44" style="border-radius:11px">
-      <div class="grow"><b>Install ${esc(HW.C.APP_NAME)}</b><div class="small muted">Add it to your home screen. Opens full-screen and works offline in the field.</div></div>
-      <span class="btn btn-primary btn-sm">${I('download')} Install</span></div>
-    <a class="card pad row" href="feedback.html" style="margin-top:10px;gap:12px;text-decoration:none;color:inherit">${I('mail')}<span class="grow"><b>Send feedback</b><span class="small muted" style="display:block">Rate the app, or report a mistake in a species page</span></span>${I('chevron-right')}</a>
-    <div class="card pad" style="margin-top:10px"><h3>Data</h3>
-      <p class="small muted" id="m-sync"></p>
-      <div class="row wrap" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="m-syncnow">Sync now</button><button class="btn btn-ghost btn-sm" id="m-csv">Export my sightings (CSV)</button><button class="btn btn-ghost btn-sm" id="m-geo">Export road-kill (GeoJSON)</button></div></div>
-    <div class="card pad" style="margin-top:10px"><h3>Settings</h3>
-      <label class="f">Theme</label><select id="m-theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-      <div class="row wrap" style="margin-top:12px"><a class="btn btn-ghost btn-sm" href="index.html">Website & reports</a><button class="btn btn-ghost btn-sm" id="m-out">Sign out</button>${HW.DEMO ? '<button class="btn btn-ghost btn-sm" id="m-reset">Reset demo data</button>' : ''}</div></div>`;
-  $('m-sync').textContent = `${outbox().length} item(s) waiting to sync · ${isOnline() ? 'online' : 'offline'} · saved on this device in 3 places`;
-  $('m-store').onclick = () => openStore();
-  window.HWInstall?.update();
-  $('m-syncnow').onclick = async () => { await syncNow(); renderMe(); };
-  $('m-theme').value = U.lsGet('hw_theme', '');
-  $('m-theme').onchange = (e) => { U.lsSet('hw_theme', e.target.value); applyTheme(); };
-  $('m-out').onclick = async () => {
-    const n = outbox().length;
-    if (n && !confirm(`${n} record(s) have not been uploaded yet. They stay safely on this device and upload after you sign in again. Sign out anyway?`)) return;
-    if (!S.me.guest) await api.signOut();
-    S.me = null; S.unlocked = {}; S.ents = []; show('auth'); paintAuthHints();
-  };
-  $('m-reset') && ($('m-reset').onclick = () => { if (confirm('Wipe all demo data in this browser?')) { api.resetDemo(); ['hw_trip', 'hw_rk', 'hw_outbox', 'hw_cat'].forEach((k) => localStorage.removeItem(k)); location.reload(); } });
-  $('m-csv').onclick = async () => {
-    try { const trips = await api.myTrips(); const rows = trips.flatMap((t) => (t.sightings || []).map((s) => ({ checklist: t.id, protocol: t.protocol, region: t.region_code, observed_at: s.observed_at, common_name: byId(s.species_id)?.common || s.species_text, scientific_name: byId(s.species_id)?.sci || '', count: s.count, lat: s.lat, lng: s.lng, life_stage: s.life_stage, sex: s.sex, notes: s.notes, review: s.review_status })));
-      U.download('herpwatch-sightings.csv', U.toCSV(rows)); } catch (e) { toast(e.message); }
-  };
-  $('m-geo').onclick = async () => {
-    try { const sv = await api.mySurveys(); const feats = sv.flatMap((s) => [
-        { type: 'Feature', properties: { kind: 'survey', road: s.road_name, km: s.distance_km, started: s.started_at }, geometry: { type: 'LineString', coordinates: (s.track || []).map(([a, b]) => [b, a]) } },
-        ...(s.records || []).map((r) => ({ type: 'Feature', properties: { kind: 'roadkill', species: byId(r.species_id)?.sci || r.species_text, group: r.pack, count: r.count, condition: r.condition, at: r.observed_at }, geometry: { type: 'Point', coordinates: [r.lng, r.lat] } }))]);
-      U.download('herpwatch-roadkill.geojson', JSON.stringify({ type: 'FeatureCollection', features: feats }), 'application/geo+json'); } catch (e) { toast(e.message); }
-  };
-}
-
-// ═════════════════════════ AUTH ═════════════════════════
-$('t-in').onclick = () => { $('t-in').classList.add('on'); $('t-up').classList.remove('on'); $('f-in').classList.remove('hidden'); $('f-up').classList.add('hidden'); };
-$('t-up').onclick = () => { $('t-up').classList.add('on'); $('t-in').classList.remove('on'); $('f-up').classList.remove('hidden'); $('f-in').classList.add('hidden'); };
-// sign-in screen helpers (from the Island Explorer driver app): where am I running, is my data safe here?
-async function paintAuthHints() {
-  const h = $('ctxhint');
-  if (U.isStandalone()) { h.className = 'ctxhint ok ae d2'; h.innerHTML = `${I('badge-check')}<span><b>You’re in the installed app.</b> Sign in once with internet; after that it opens and records with no signal.</span>`; }
-  else if (U.isInAppBrowser()) { h.className = 'ctxhint warn ae d2'; h.innerHTML = `${I('triangle-alert')}<span><b>You opened this inside a chat app’s browser</b> (WhatsApp, Instagram…). Data saved here can be lost. Tap ⋮ → <b>Open in Chrome / Safari</b>, then install the app.</span>`; }
-  else { h.className = 'ctxhint ae d2'; h.innerHTML = `${I('smartphone')}<span>For field work, <button type="button" class="linkbtn" data-install>install the app</button> and open it from your home screen. It keeps working with no signal.</span>`; }
-  const n = outbox().length + (TRIP() ? 1 : 0) + (RK() ? 1 : 0);
-  $('diag').innerHTML = !U.storageWorks() ? `${I('triangle-alert')} This browser is blocking storage (private mode?). Records can’t be kept offline here.`
-    : n ? `${I('shield-check')} ${n} unsynced record(s) are safe on this device and will upload after you sign in.` : '';
-  const off = !isOnline();
-  $('offline-go').classList.toggle('hidden', !(off || n));
-  $('offline-go').innerHTML = `${I('cloud-off')} ${n ? 'Keep recording offline' : 'No signal? Record offline now'}`;
-}
-$('offline-go').onclick = async () => {
-  // record without signing in; everything is queued and uploads under the account you sign in with later
-  S.me = { id: 'guest', username: 'offline', full_name: 'Offline recorder', role: 'user', status: 'approved', guest: true };
-  fillRegionSelect($('region'), S.region); await loadChecklist(); paintSync();
-  show(RK() ? 'roadkill' : 'record'); toast('Recording offline. Sign in from “Me” when you have signal to upload.', 5000);
-};
-// opened from a "reset password" e-mail → choose a new password
-function askNewPassword() {
-  openSheet(`<h3 class="row" style="gap:8px">${I('lock')} Set a new password</h3>
-    <p class="small muted" style="margin:4px 0 10px">For ${esc(S.me?.email || 'your account')}. It works for the app and the dashboard.</p>
-    <label class="f" for="np1">New password</label><input id="np1" type="password" minlength="6" autocomplete="new-password">
-    <label class="f" for="np2">Repeat it</label><input id="np2" type="password" minlength="6" autocomplete="new-password">
-    <button class="btn btn-primary btn-block" id="np-save" style="margin-top:14px">Save new password</button>`);
-  $('np1').focus();
-  $('np-save').onclick = async () => {
-    if ($('np1').value !== $('np2').value) return toast('The two passwords don’t match');
-    $('np-save').disabled = true;
-    try { await api.updatePassword($('np1').value); closeSheet(); toast('Password changed. You’re signed in.', 5000); }
-    catch (er) { $('np-save').disabled = false; toast(er.message, 5000); }
-  };
-}
-function authNote(html) { const n = $('auth-note'); n.innerHTML = html; n.classList.toggle('hidden', !html); }
-function offerResend(email) {
-  authNote(`${I('mail')}<span>Didn’t get the e-mail? <button type="button" class="linkbtn" id="resend">Send it again</button></span>`);
-  $('resend').onclick = async () => { try { await api.resendConfirmation(email); toast('Confirmation e-mail sent to ' + email, 4000); } catch (er) { toast(er.message, 4000); } };
-}
-function showSignIn(email) { $('t-in').click(); if (email) $('in-email').value = email; $('in-pw').focus(); }
-$('f-in').onsubmit = async (e) => {
-  e.preventDefault(); authNote('');
-  const email = $('in-email').value.trim();
-  try { S.me = await api.signIn(email, $('in-pw').value); await afterLogin(); }
-  catch (er) { toast(HW.isNetError(er) ? 'No connection. You can still record offline; sign in later to upload.' : er.message, 5000); if (er.code === 'email_not_confirmed') offerResend(email); paintAuthHints(); }
-};
-$('f-up').onsubmit = async (e) => {
-  e.preventDefault();
-  authNote('');
-  const email = $('up-email').value.trim();
-  try { S.me = await api.signUp({ full_name: $('up-name').value.trim(), username: $('up-user').value.trim().toLowerCase(), phone: $('up-phone').value.trim(), email, home_region: $('up-region').value, password: $('up-pw').value });
-    if (!S.me) { showSignIn(email); toast(`Almost done: confirm the e-mail we sent to ${email}, then sign in here or in the dashboard.`, 7000); return offerResend(email); }
-    await afterLogin(); }
-  catch (er) { toast(er.message, 6000); if (er.code === 'already_registered') showSignIn(email); }
-};
-$('g-in').onclick = async () => { try { await api.signInWithGoogle(location.href.split('#')[0]); } catch (er) { toast(er.message, 4000); } };
-document.querySelectorAll('[data-eye]').forEach((b) => (b.onclick = () => { const i = $(b.dataset.eye); i.type = i.type === 'password' ? 'text' : 'password'; b.style.opacity = i.type === 'text' ? 1 : .6; }));
-$('forgot').onclick = async () => {
-  const em = $('in-email').value.trim();
-  if (!em.includes('@')) { $('in-email').focus(); return toast('Type your e-mail address above first, then tap Reset password.'); }
-  try { await api.resetPassword(em); authNote(`${I('mail')}<span>If <b>${esc(em)}</b> has an account, a reset link is on its way. Open it on this device; it brings you back here to choose a new password. Check spam too.</span>`); }
-  catch (er) { toast(er.message, 7000); authNote(`${I('triangle-alert')}<span>${esc(er.message)}</span>`); }
-};
-async function afterLogin() {
-  if (S.me?.home_region && !localStorage.getItem('hw_region')) { S.region = S.me.home_region; U.lsSet('hw_region', S.region); }
-  fillRegionSelect($('region'), S.region);
-  await loadUser(); await loadChecklist(); syncNow(); startLive(); show('guide');
-}
-function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.documentElement.setAttribute('data-theme', t) : document.documentElement.removeAttribute('data-theme'); }
-
-// ═════════════════════════ boot ═════════════════════════
-(async function boot() {
-  applyTheme();
-  $('brand').textContent = HW.C.APP_NAME; document.title = HW.C.APP_NAME + ' Field App'; $('tagline').textContent = HW.C.TAGLINE;
-  $('auth-app').textContent = $('auth-name').textContent = HW.C.APP_NAME;
-  if (!HW.DEMO) { $('in-email').type = 'email'; $('in-email').autocomplete = 'email'; $('in-email').placeholder = 'Enter your e-mail address'; document.querySelector('label[for=in-email]').textContent = 'E-mail'; }
-  document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = I(el.dataset.ic)));
-  document.querySelectorAll('.iconbtn[data-install]').forEach((el) => (el.innerHTML = I('download')));
-  if (HW.DEMO) { $('demo').classList.remove('hidden'); document.body.style.setProperty('--topoff', $('demo').offsetHeight + 'px'); }
-  await Promise.all(['hw_trip', 'hw_rk', 'hw_outbox'].map((k) => U.durGet(k)));   // re-seed localStorage if the browser cleared it
-  await loadCatalog();
-  fillRegionSelect($('region'), S.region); fillRegionSelect($('up-region'), S.region);
-  try { S.me = await api.session(); } catch { S.me = null; }
-  const linkErr = api.linkError();
-  if (!S.me) {
-    paintSync(); paintAuthHints(); show('auth');
-    if (linkErr) { authNote(`${I('triangle-alert')}<span>${esc(linkErr)}</span>`); toast(linkErr, 7000); }
-    return;
-  }
-  if (api.isRecovery()) { await afterLogin(); return askNewPassword(); }
-  await afterLogin();
-  const h = new URLSearchParams(location.search).get('app') === 'roadkill' ? 'roadkill' : location.hash.slice(1);
-  if (TRIP()) show('record'); else if (RK()) show('roadkill'); else if (['guide', 'identify', 'record', 'roadkill', 'me'].includes(h)) show(h);
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-})();
-</script>
-<script>if (!HW.DEMO) { const s = document.createElement('script'); s.src = 'https://checkout.razorpay.com/v1/checkout.js'; s.async = true; document.head.appendChild(s); }</script>
+<script src="app.js"></script>
 </body>
 </html>

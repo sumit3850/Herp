@@ -375,6 +375,8 @@
     async submitFeedback(f) { need(); const { data: { session } } = await sb.auth.getSession(); ok(await sb.from('feedback').insert({ ...f, user_id: session?.user?.id || null })); },
 
     // ── public (website / Explore) ──
+    async nearbySpecies(lat, lng, km = 10, days = 3650) { need(); return ok(await sb.rpc('nearby_species', { p_lat: lat, p_lng: lng, p_km: km, p_days: days })); },
+    async speciesMedia(id) { need(); return ok(await sb.from('species_media').select('*').eq('species_id', id).order('kind').order('sort').order('created_at')); },
     async publicStats() { need(); return ok(await sb.rpc('public_stats')); },
     async publicPoints() { need(); return ok(await sb.rpc('public_points')); },
     async publicTracks() { need(); return ok(await sb.rpc('public_tracks')); },
@@ -457,11 +459,23 @@
         return ok(await sb.from('reviewer_submissions').insert({ submitted_by: m.id, kind, region_code: region, species_id: species, payload, note, refs }).select().single());
       },
       async decideSubmission(id, approve, note = '') { need(); return ok(await sb.rpc('decide_submission', { p_id: id, p_approve: !!approve, p_note: note })); },
+      /** upload a file (image, video, audio, PDF) to the public species bucket and return its URL */
+      async uploadSpeciesFile(file, speciesId) {
+        need();
+        const ext = (file.name || '').split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+        const path = `${speciesId}/${Date.now()}-${uid().slice(0, 8)}.${ext}`;
+        const { error } = await sb.storage.from('species').upload(path, file, { contentType: file.type || undefined, upsert: false });
+        if (error) throw new Error(/row-level|policy|not authorized/i.test(error.message) ? 'Upload refused: the species storage policy is missing (re-run setup.sql) or you are not a reviewer.' : error.message);
+        return { url: sb.storage.from('species').getPublicUrl(path).data.publicUrl, storage_path: path };
+      },
+      async addMedia(m) { need(); const me_ = await me(); return ok(await sb.from('species_media').insert({ ...pick(m, ['species_id', 'kind', 'url', 'storage_path', 'title', 'caption', 'credit', 'license', 'citation', 'doi', 'year', 'sort']), added_by: me_.id }).select().single()); },
+      async updateMedia(id, patch) { need(); ok(await sb.from('species_media').update(pick(patch, ['title', 'caption', 'credit', 'license', 'citation', 'doi', 'year', 'sort'])).eq('id', id)); },
+      async deleteMedia(id) { need(); ok(await sb.from('species_media').delete().eq('id', id)); },
       async setSetting(key, value) { need(); ok(await sb.from('platform_settings').upsert({ key, value, updated_at: new Date().toISOString() })); },
       /** complete platform export (Admin): every table the Admin can read */
       async exportAll() {
         need();
-        const tables = ['profiles', 'regions', 'species', 'checklist', 'trips', 'sightings', 'photos', 'observation_reviews', 'track_points', 'reviewer_submissions', 'roadkill_surveys', 'roadkill_records', 'feedback', 'access_requests', 'audit_log', 'platform_settings', 'pack_prices', 'entitlements'];
+        const tables = ['profiles', 'regions', 'species', 'species_media', 'checklist', 'trips', 'sightings', 'photos', 'observation_reviews', 'track_points', 'reviewer_submissions', 'roadkill_surveys', 'roadkill_records', 'feedback', 'access_requests', 'audit_log', 'platform_settings', 'pack_prices', 'entitlements'];
         const out = {};
         for (const t of tables) {
           const rows = []; let from = 0;

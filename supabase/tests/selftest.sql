@@ -15,6 +15,7 @@ returns table(area text, test text, ok boolean, detail text)
 language plpgsql as $$
 declare
   r jsonb := '[]';
+  n2 int;
   F  uuid := '00000000-0000-4000-8000-00000000f001';  -- field user
   RV uuid := '00000000-0000-4000-8000-00000000f002';  -- reviewer
   AD uuid := '00000000-0000-4000-8000-00000000f003';  -- admin
@@ -252,7 +253,7 @@ begin
     select count(*) into n from public.sightings where id = '00000000-0000-4000-8000-0000000b0009';
     r := r || jsonb_build_object('a','7 reviewer','t','reviewers can see private observations to verify them','ok', n = 1,'d', '');
     if extra_sp is not null then
-      insert into public.checklist (region_code, species_id, status) values (g_region, extra_sp, 'native');
+      insert into public.checklist (region_code, species_id, status) values (g_region, extra_sp, 'native') on conflict (region_code, species_id) do update set status = excluded.status;
       r := r || jsonb_build_object('a','7 reviewer','t','can add species to a regional checklist','ok', true,'d', extra_sp);
       delete from public.checklist where region_code = g_region and species_id = extra_sp;
       get diagnostics n = row_count;
@@ -352,6 +353,32 @@ begin
       select count(*) into n from public.public_leaderboard(null, null, null, 50);
       r := r || jsonb_build_object('a','9 privacy','t','leaderboard is public (species counts only, no locations)','ok', true,'d', n || ' recorders');
     exception when others then r := r || jsonb_build_object('a','9 privacy','t','leaderboard is public','ok', false,'d', sqlerrm); end;
+    select count(*) into n from public.nearby_species(11.5555, 92.6666, 5, 3650) ns where ns.species_id = any_sp;
+    r := r || jsonb_build_object('a','9 privacy','t','"likely species nearby" works without exposing locations','ok', n = 1,'d', '');
+    reset role;
+    -- ── species media: reviewers add photos / videos / papers; users can't ─────
+    perform set_config('request.jwt.claims', json_build_object('sub', RV, 'role', 'authenticated')::text, true);
+    perform set_config('request.jwt.claim.sub', RV::text, true);
+    set local role authenticated;
+    begin
+      insert into public.species_media (species_id, kind, url, title, added_by) values
+        (any_sp, 'image', 'https://example.org/a.jpg', 'Adult, dorsal', RV),
+        (any_sp, 'paper', 'https://doi.org/10.0000/test', 'A new record', RV);
+      r := r || jsonb_build_object('a','11 media','t','reviewers add photos, videos and research papers to species','ok', true,'d', '');
+    exception when others then r := r || jsonb_build_object('a','11 media','t','reviewers add photos, videos and research papers to species','ok', false,'d', sqlerrm); end;
+    reset role;
+    perform set_config('request.jwt.claims', json_build_object('sub', F, 'role', 'authenticated')::text, true);
+    perform set_config('request.jwt.claim.sub', F::text, true);
+    set local role authenticated;
+    begin
+      insert into public.species_media (species_id, kind, url, added_by) values (any_sp, 'image', 'https://example.org/b.jpg', F);
+      r := r || jsonb_build_object('a','11 media','t','observers cannot add species media','ok', false,'d', 'insert allowed');
+    exception when insufficient_privilege then r := r || jsonb_build_object('a','11 media','t','observers cannot add species media','ok', true,'d', ''); end;
+    reset role;
+    perform set_config('request.jwt.claims', claims_anon, true); perform set_config('request.jwt.claim.sub', '', true);
+    set local role anon;
+    select count(*) filter (where kind = 'paper'), count(*) filter (where kind = 'image') into n, n2 from public.species_media where species_id = any_sp and url like 'https://%example.org%' or (species_id = any_sp and url like 'https://doi.org/10.0000/test');
+    r := r || jsonb_build_object('a','11 media','t','research papers are public; photos follow the pack rules','ok', n = 1 and n2 = 0,'d', n || ' paper, ' || n2 || ' photo visible');
     reset role;
     update public.platform_settings set value = 'false' where key = 'require_packs';
     perform set_config('request.jwt.claims', json_build_object('sub', BL, 'role', 'authenticated')::text, true);

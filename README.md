@@ -23,8 +23,9 @@ A field recording and species documentation platform for the **reptiles and amph
 Six tabs: **Home · Record · Explore · Checklist · My records · Profile.**
 
 - **Home.** A large **START NEW HERPING SESSION** button (or the running session with its timer), **Add an observation without a session**, personal stats (life list, observations, sessions, hours, distance, verified records), observations per month and **your species by year** (to today’s date vs the whole year).
-- **Record (herping session).** Pick the survey type: *Day herping, Night herping, Road survey, Transect, Habitat survey, Opportunistic, Creek & mangrove, Stream & wetland*. Date and start time (adjustable), GPS position, accuracy, elevation, place name, state, district and island are captured automatically. A **Record GPS track** switch records the route continuously. Start, pause, resume, stop and save; pauses are excluded from the duration. The session survives app restarts and flat batteries.
+- **Record (herping session).** Pick the survey type: *Day herping, Night herping, Road survey, Transect, Habitat survey, Opportunistic, Creek & mangrove, Stream & wetland*. Date and start time (adjustable), GPS position, accuracy, elevation, place name, state, district and island are captured automatically, and a **Record GPS track** switch records the route. While recording, the screen shows the timer, distance and place, a **Likely species** list (species recorded within 10 km, or the island/district/state checklist when offline) with a one-tap **+** (each tap adds one individual with its own time and GPS point), a search box to add any species or an unidentified animal, and a bar with filters, notes, recorded species and **Stop**. Stop asks “Are you done herping?”; *Stop track* opens a review page (date, location or *Choose location*, survey type, observers, minutes, distance, complete list yes/no, weather, comments, the species list) where you can go back to recording or **Submit**. The session survives app restarts and flat batteries.
 - **Observations.** Each keeps its own timestamp and GPS point. Fields: species (with family, genus and order shown) or free text for unidentified animals, ID confidence, evidence (direct sighting, shed skin, eggs, tracks, call, remains, photo only), count, life stage (egg, hatchling, tadpole, juvenile, subadult, adult, unknown), sex, condition (alive, road-kill, other mortality), wild or captive, habitat, microhabitat, behaviour, activity, weather, temperature, notes, several photos (with view labels and metadata) and privacy (public, restricted, private). Animals never need to be handled; the form says so.
+- **Species pages** (from Explore, Checklist or My records): full-width photo gallery with credits, name, description, a play button for calls, videos (uploaded or YouTube), safety notes, a **distribution map** (checklist regions plus public records), habitat and conservation, and **research papers** with DOI links.
 - **Explore.** *Nearby*: species seen in the region over the last 7/30/365 days, public records, observers, and **life / year / month targets** (species seen nearby that are missing from your lists). *Map*: public observations filtered by species, family, date, region (state, district, island) and status, with your own routes as a separate layer. *Species*: field guide with group, order, family and genus filters and grid or list view. *Identify*: step-by-step helper. *Top*: leaderboard of recorders by distinct species (all time, this year, this month; by region and group).
 - **Checklist.** Any state, UT, district, island or region. Filter by group, order, family, genus, seen or not yet recorded. **Only your own observations tick a species**; a species being on a checklist never marks it as seen. Shows first and most recent observation dates.
 - **My records.** Observations with verification status, reviewer notes, the review history and your original identification if a reviewer changed it; reply to reviewers; edit; delete unless verified. Sessions split into *On this phone* and *Uploaded*, each with a species tile, route map and GPX download. Life list with first and last dates. Export as **CSV, Excel or PDF**.
@@ -50,7 +51,7 @@ Everything is written to the phone first (localStorage, IndexedDB and the Cache 
 | Area | Tables |
 |---|---|
 | Accounts & roles | `profiles`, `platform_owner`, `access_requests` |
-| Taxonomy & species | `species` (common/scientific name, authority, family, genus, order, group, IUCN, venom, endemic, sensitive, references, photos), `packs` |
+| Taxonomy & species | `species_media` (photos, videos, calls, papers), `species` (common/scientific name, authority, family, genus, order, group, IUCN, venom, endemic, sensitive, references, photos), `packs` |
 | Regions & checklists | `regions` (country, state, UT, district, island, region, protected area; with centre coordinates), `checklist` |
 | Field data | `trips` (sessions), `track_points`, `sightings` (observations), `photos` |
 | Review | `observation_reviews`, `reviewer_submissions` (proposals) |
@@ -79,6 +80,7 @@ An EST-style operations dashboard built on the shadcn **App1** layout: a collaps
 - **Overview.** KPIs, a 12-week chart, checklist coverage per state, recent activity.
 - **Observations.** Every observation and session, filtered by status, region (incl. districts and islands), survey type, dates and text; off-checklist records flagged. The review panel shows photos, map and all fields, the observer’s original ID, and the review history, with **Verify, Needs ID, Ask for info, Change ID, Suggest ID, Duplicate, Reject, Comment, Re-open**. CSV export.
 - **Checklists.** Reviewers add species and set status; only the Admin removes. Paste a published list, copy another region, export CSV.
+- **Species media.** Admin and reviewers add **photos, videos, calls (audio) and research papers** to any species: upload a file (stored in the `species` bucket, up to 50 MB) or paste a link (YouTube, publisher, DOI), with title, credit, licence, caption, full reference and year. Table `species_media`; photos, videos and calls follow the pack rules, papers are public. Reviewers can remove their own items; the Admin can remove any.
 - **Species.** Admin: full editing incl. taxonomy (genus, order, group, authority) and bulk import. Reviewers: *Annotate* (distribution, habitat, endemic, IUCN, sensitive, reference photos, references).
 - **Proposals / Approvals.** Reviewers propose new species, taxonomy changes, regional checklists and reference photos; the Admin approves (applied automatically) or rejects with a note.
 - **Regions** (Admin): add districts, islands, protected areas, with centre coordinates.
@@ -122,7 +124,7 @@ dashboard/       its committed production build (served at /dashboard/)
 sw.js            offline cache (app shell + map tiles)
 supabase/schema.sql                       tables, RLS, views, RPCs, storage buckets
 supabase/seed.sql                         generated: node scripts/build-seed.mjs
-supabase/tests/selftest.sql               82 checks with simulated users (rolled back)
+supabase/tests/selftest.sql               86 checks with simulated users (rolled back)
 tests/local-supabase/                     a small local stand-in for Supabase used for end-to-end tests
 supabase/functions/create-order           prices the cart server-side, creates the Razorpay order
 supabase/functions/razorpay-webhook       verifies the payment, writes entitlements
@@ -143,7 +145,7 @@ The end-to-end tests use a local Postgres and `tests/local-supabase/server.mjs`,
   3. Actions → **Supabase setup (database + backend)** → Run workflow.
 - **Option B, SQL Editor:** open `supabase/setup.sql` (schema + catalogue in one file), paste it into Supabase → SQL Editor, and Run.
 
-**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs 82 checks with simulated users: accounts, the sole-Admin rule, sessions, track points, photos, privacy, the review workflow (original ID kept, history, verified records protected), reviewer proposals, purchases and live updates. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
+**Test it.** Paste `supabase/tests/selftest.sql` into the SQL Editor and Run. It runs 86 checks with simulated users: accounts, the sole-Admin rule, sessions, track points, photos, privacy, the review workflow (original ID kept, history, verified records protected), reviewer proposals, purchases and live updates. All its test data is rolled back, so your real data is never touched. Every row should show `ok = true`. The GitHub Action runs the same test after each setup.
 
 **2. Auth settings.** In Supabase → Authentication:
 - **URL Configuration → Site URL:** `https://sumit3850.github.io/Herp/app.html`.

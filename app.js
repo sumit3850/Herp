@@ -241,10 +241,11 @@ addEventListener('hw-net', (e) => { paintSync(); if (e.detail) syncNow(); });
 setInterval(() => { if (outbox().length && document.visibilityState === 'visible') syncNow(); }, 45 * 1000);
 
 // ───────────────────────── navigation ─────────────────────────
-const VIEWS = { home: renderHome, record: renderRecord, explore: renderExplore, checklist: renderChecklist, obs: renderObs, profile: renderProfile };
+const VIEWS = { home: renderHome, record: renderRecord, explore: renderExplore, checklist: renderChecklist, obs: renderObs, profile: renderProfile, species: () => renderSpeciesPage() };
 function show(v) {
   if (v !== 'auth' && !VIEWS[v]) v = 'home';
   if (S.view === 'record' && v !== 'record') recLeave();
+  if (S.view === 'species' && v !== 'species' && spPage.map) { try { spPage.map.m.remove(); } catch {} spPage.map = null; }
   S.view = v;
   document.querySelectorAll('.view').forEach((x) => x.classList.toggle('on', x.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
@@ -252,7 +253,8 @@ function show(v) {
   $('region').classList.toggle('hidden', !['explore', 'checklist'].includes(v));
   VIEWS[v]?.();
   if (v !== 'auth') history.replaceState(null, '', '#' + v);
-  scrollTo(0, 0);
+  const y0 = v === spPage.back && spPage.y ? spPage.y : 0; if (y0) spPage.y = 0;
+  scrollTo(0, y0);
 }
 const rerender = () => VIEWS[S.view]?.();
 $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.v); };
@@ -360,49 +362,142 @@ function onSessionFix(f) {
   }
   paintLive(s, f);
 }
-function recLeave() { clearInterval(recTick); if (recMap) { recMap.m.remove(); recMap = null; } }
+function recLeave() { clearInterval(recTick); if (recMap) { recMap.m.remove(); recMap = null; } document.body.classList.remove('recording'); }
+const REC = { q: '', group: '', showMap: false, open: false };
+/** likely species: records within 10 km (online), else the island / district / state checklist cached on the phone */
+async function loadLikely(s, force) {
+  if (!force && s.likely && Date.now() - (s.likely_at || 0) < 10 * 60000) return;
+  let rows = null, basis = '';
+  if (s.lat != null && isOnline() && S.me && !S.me.guest) {
+    try { rows = await api.nearbySpecies(s.lat, s.lng, 10, 3650); basis = `Likely species based on ${rows.reduce((a, r) => a + +r.records, 0)} records within 10 km`; } catch {}
+  }
+  const cl = [];
+  for (const code of [s.island_code, s.district_code, s.state_code].filter(Boolean)) {
+    let ids = U.lsGet('hw_cl_' + code, null);
+    if (!ids && isOnline()) { await loadChecklist(code); ids = U.lsGet('hw_cl_' + code, null); }
+    if (ids?.length) { cl.push(...ids); if (!basis || !rows?.length) basis = `Species on the ${regionName(code)} checklist`; break; }
+  }
+  const x = SES(); if (!x || x.id !== s.id) return;
+  const seen = new Map((rows || []).map((r) => [r.species_id, +r.records]));
+  x.likely = [...seen.keys(), ...cl.filter((id) => !seen.has(id))].map((id) => ({ id, n: seen.get(id) || 0 }));
+  x.likely_basis = rows?.length ? basis : cl.length ? basis : 'No checklist for this place yet: search to add species';
+  x.likely_at = Date.now(); saveSES(x, false);
+  if (S.view === 'record' && !x.stopped) { paintRecList(); if ($('r-basis')) $('r-basis').textContent = x.likely_basis; }
+}
 function renderRecord() {
   recLeave();
   const s = SES();
   if (!s) return renderRecordStart();
+  if (s.stopped) return renderReview();
   Geo.start(onSessionFix);
+  document.body.classList.add('recording');
   const el = $('rec');
   el.innerHTML = `
-    <div class="live-card">
-      <div class="row" style="justify-content:space-between"><span class="badge ${s.status === 'active' ? 'rec' : 'warn'}">${s.status === 'active' ? 'Recording' : 'Paused'}</span><span class="small muted">${I(TYPE_ICON[s.survey_type])} ${esc(SURVEY_TYPES[s.survey_type])}</span></div>
-      <div class="timer" id="r-timer" style="margin-top:10px">${hms(elapsed(s))}</div>
-      <div class="small muted" style="margin-top:4px">${esc(s.title || '')}${s.title ? ' · ' : ''}Started ${fmtTime(s.started_at)}${s.location_name ? ' · ' + esc(s.location_name) : ''}${s.island_code || s.district_code || s.state_code ? ' · ' + esc(regionName(s.island_code || s.district_code || s.state_code)) : ''}</div>
-      <div class="livestat"><div><b id="r-km">0.00</b><span>${s.track_on === false ? 'track off' : miles() ? 'miles' : 'km'}</span></div><div><b>${s.observations.length}</b><span>observations</span></div><div><b id="r-acc">–</b><span>GPS accuracy</span></div></div>
-      <div class="row" style="margin-top:12px;gap:8px">
-        <button class="btn btn-primary grow" id="r-add" style="min-height:52px">${I('plus')} Add observation</button>
-      </div>
-      <div class="row" style="margin-top:8px;gap:8px">
-        ${s.status === 'active' ? `<button class="btn btn-ghost grow" id="r-pause">${I('pause')} Pause</button>` : `<button class="btn btn-ghost grow" id="r-resume">${I('play')} Resume</button>`}
-        <button class="btn btn-red grow" id="r-stop">${I('square')} Stop & save</button>
-      </div>
+    <div class="ses-top">
+      <button class="ses-ic" id="r-mapbtn" aria-label="Show map" title="Map">${I('map')}</button>
+      <b class="mono" id="r-timer">${hms(elapsed(s))}</b><b class="mono" id="r-km">${dist(U.trackKm(s.track))}</b>
+      <button class="ses-loc" id="r-loc">${I('map-pin')}<span id="r-locname">${esc(s.location_name || regionName(s.island_code || s.district_code || s.state_code) || 'Locating…')}</span></button>
+      <button class="ses-ic" id="r-more" aria-label="Session details">${I('chevron-right', REC.open ? 'rot-up' : 'rot-down')}</button>
     </div>
-    <div id="recmap"></div>
-    <div class="legend"><span><i style="background:#2f7d4f"></i>Route</span><span><i style="background:#c53030"></i>Observation</span><span><i style="background:#2b6cb0"></i>You</span></div>
-    <div class="sect"><h3>Observations in this session</h3><span class="small muted">${s.observations.length}</span></div>
-    <div class="card">${s.observations.length ? s.observations.slice().reverse().map((o) => obsRow({ ...o, _pending: true, _live: true })).join('') : '<div class="empty small">Nothing recorded yet. Tap “Add observation” whenever you find an animal or a sign (shed skin, eggs, tracks, calls).</div>'}</div>
-    <p class="tiny muted" style="margin-top:10px">${I('shield-check')} The session is saved on this phone after every change, so a closed app or a flat battery won’t lose it. Keep the screen on for the best GPS track.</p>`;
-  $('r-add').onclick = () => openObservation({ session: true });
+    <div class="ses-more ${REC.open ? '' : 'hidden'}" id="r-panel">
+      <div class="row" style="justify-content:space-between"><span class="badge ${s.status === 'active' ? 'rec' : 'warn'}">${s.status === 'active' ? 'Recording' : 'Paused'}</span><span class="small muted">${I(TYPE_ICON[s.survey_type])} ${esc(SURVEY_TYPES[s.survey_type])}</span></div>
+      <div class="small muted" style="margin-top:6px">${esc(s.title ? s.title + ' · ' : '')}Started ${fmtTime(s.started_at)} · GPS <span id="r-acc">–</span> · ${s.track_on === false ? 'track off' : s.points.length + ' track points'}</div>
+      <div class="row" style="gap:8px;margin-top:10px">${s.status === 'active' ? `<button class="btn btn-ghost grow" id="r-pause">${I('pause')} Pause</button>` : `<button class="btn btn-primary grow" id="r-resume">${I('play')} Resume</button>`}
+        <button class="btn btn-ghost grow" id="r-home">${I('house')} Go to Home</button></div>
+    </div>
+    <div id="recmap" class="${REC.showMap ? '' : 'hidden'}"></div>
+    <div class="ses-banner" id="r-basis">${esc(s.likely_basis || 'Finding likely species…')}</div>
+    <div class="ses-add"><span>${I('plus')}</span><input id="r-q" type="search" placeholder="Add observation or find species" value="${esc(REC.q)}" autocomplete="off"></div>
+    ${REC.group ? `<div class="chips" style="margin:8px 0 0"><button class="chip on" id="r-clrgrp">${esc(GROUPS[REC.group] || REC.group)} ×</button></div>` : ''}
+    <div id="r-list" class="ses-list"></div>
+    <div class="ses-bar">
+      <button class="ses-ic" id="r-filter" aria-label="Filter species">${I('sliders-horizontal')}</button>
+      <button class="ses-ic" id="r-notes" aria-label="Session notes">${I('message-square')}${s.notes ? '<i class="dotmark"></i>' : ''}</button>
+      <button class="ses-ic" id="r-done" aria-label="Recorded species">${I('check')}<span class="cnt-badge">${new Set(s.observations.map((o) => o.species_id || o.species_text)).size}</span></button>
+      <span class="grow"></span>
+      <button class="btn btn-primary ses-stop" id="r-stop">Stop</button>
+    </div>`;
+  $('r-more').onclick = () => { REC.open = !REC.open; renderRecord(); };
+  $('r-mapbtn').onclick = () => { REC.showMap = !REC.showMap; renderRecord(); };
+  $('r-loc').onclick = () => { REC.open = true; renderRecord(); };
   $('r-pause') && ($('r-pause').onclick = () => { const x = SES(); x.status = 'paused'; x.paused_at = new Date().toISOString(); saveSES(x); renderRecord(); toast('Paused: time and track stop until you resume'); });
   $('r-resume') && ($('r-resume').onclick = () => { const x = SES(); x.paused_ms = (x.paused_ms || 0) + (Date.now() - new Date(x.paused_at)); x.status = 'active'; x.paused_at = null; saveSES(x); renderRecord(); });
-  $('r-stop').onclick = finishSession;
-  el.querySelectorAll('[data-obs]').forEach((b) => (b.onclick = () => { const o = SES().observations.find((x) => x.id === b.dataset.obs); if (o) openObservation({ session: true, edit: o }); }));
-  recMap = drawMap('recmap', s.track, s.observations.filter((o) => o.lat != null).map((o) => ({ lat: o.lat, lng: o.lng, label: spName(o) })), { me: Geo.last });
-  paintLive(s, Geo.last);
+  $('r-home').onclick = () => show('home');
+  $('r-q').oninput = (e) => { REC.q = e.target.value; paintRecList(); };
+  $('r-clrgrp') && ($('r-clrgrp').onclick = () => { REC.group = ''; renderRecord(); });
+  $('r-filter').onclick = () => {
+    const groups = [...new Set(S.index.map((x) => x.group).filter(Boolean))];
+    openSheet(`<h3>Show</h3><div class="chips" style="flex-wrap:wrap;margin-top:10px"><button class="chip ${!REC.group ? 'on' : ''}" data-g="">All groups</button>${groups.map((g) => `<button class="chip ${REC.group === g ? 'on' : ''}" data-g="${g}">${esc(GROUPS[g] || g)}</button>`).join('')}</div>`);
+    $('sheetbody').querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { REC.group = b.dataset.g; closeSheet(); renderRecord(); }));
+  };
+  $('r-notes').onclick = () => {
+    openSheet(`<h3>Session notes</h3><textarea id="rn-t" rows="5" style="margin-top:10px" placeholder="Weather, route, habitat, people, anything useful">${esc(SES().notes || '')}</textarea><button class="btn btn-primary btn-block" id="rn-s" style="margin-top:10px">Save</button>`);
+    $('rn-s').onclick = () => { const x = SES(); x.notes = $('rn-t').value.trim(); saveSES(x); closeSheet(); renderRecord(); };
+  };
+  $('r-done').onclick = () => { REC.q = ''; REC.onlyMine = !REC.onlyMine; paintRecList(); };
+  $('r-stop').onclick = askStop;
+  if (REC.showMap) recMap = drawMap('recmap', s.track, s.observations.filter((o) => o.lat != null).map((o) => ({ lat: o.lat, lng: o.lng, label: spName(o) })), { me: Geo.last });
+  paintRecList(); paintLive(s, Geo.last); loadLikely(s);
   recTick = setInterval(() => { const x = SES(); if (x && $('r-timer')) $('r-timer').textContent = hms(elapsed(x)); }, 1000);
+}
+/** the species list: recorded first, then likely species; + adds one individual with the current time & GPS */
+function paintRecList() {
+  const s = SES(), el = $('r-list'); if (!s || !el) return;
+  const counts = {}; for (const o of s.observations) { const k = o.species_id || 'txt:' + o.species_text; counts[k] = (counts[k] || 0) + (+o.count || 0); }
+  const q = REC.q.trim().toLowerCase();
+  const match = (x) => (!REC.group || x.group === REC.group) && (!q || `${x.common} ${x.sci} ${x.family} ${x.genus}`.toLowerCase().includes(q));
+  let ids;
+  if (q) ids = S.index.filter(match).sort((a, b) => ((s.likely || []).findIndex((l) => l.id === b.id) >= 0) - ((s.likely || []).findIndex((l) => l.id === a.id) >= 0) || a.common.localeCompare(b.common)).slice(0, 60).map((x) => x.id);
+  else {
+    const mine = [...new Set(s.observations.filter((o) => o.species_id).map((o) => o.species_id))];
+    ids = REC.onlyMine ? mine : [...mine, ...(s.likely || []).map((l) => l.id).filter((id) => !mine.includes(id))];
+    ids = ids.filter((id) => byId(id) && match(byId(id)));
+  }
+  const unlisted = s.observations.filter((o) => !o.species_id);
+  const row = (sp) => { const n = counts[sp.id] || 0; return `<div class="ses-row ${n ? 'has' : ''}"><button class="plus" data-add="${esc(sp.id)}" aria-label="Add ${esc(sp.common)}">${n ? `<b>${n}</b>` : I('plus')}</button>
+    <button class="nm" data-open="${esc(sp.id)}"><span>${nmHtml(sp)}${sp.venom === 'venomous' ? ` <span class="vflag" title="Venomous">${I('triangle-alert')}</span>` : ''}</span>${nameMode() === 'common' ? `<small><i>${esc(sp.sci)}</i></small>` : ''}</button></div>`; };
+  el.innerHTML = ids.map((id) => row(byId(id))).join('')
+    + (!q && !REC.group ? unlisted.map((o) => `<div class="ses-row has"><button class="plus" data-edit="${esc(o.id)}"><b>${o.count}</b></button><button class="nm" data-edit="${esc(o.id)}"><span><i>${esc(o.species_text)}</i></span><small>${esc(EVIDENCE[o.evidence] || '')} · not in the list</small></button></div>`).join('') : '')
+    + (q ? `<div class="ses-row"><button class="plus" data-txt="1">${I('plus')}</button><button class="nm" data-txt="1"><span>Add “${esc(REC.q.trim())}”</span><small>Unidentified or not in the list: a reviewer can identify it</small></button></div>` : '')
+    + (!ids.length && !q ? `<div class="empty small">${REC.onlyMine ? 'Nothing recorded yet.' : 'Type a name above to find a species.'}</div>` : '');
+  el.onclick = async (e) => {
+    const a = e.target.closest('[data-add]'), o = e.target.closest('[data-open]'), ed = e.target.closest('[data-edit]'), t = e.target.closest('[data-txt]');
+    if (a) return quickAdd(a.dataset.add);
+    if (o) { const x = SES(); const last = x.observations.filter((y) => y.species_id === o.dataset.open).pop(); return last ? openObservation({ session: true, edit: last }) : openObservation({ session: true, species: o.dataset.open }); }
+    if (ed) { const x = SES(); const ob = x.observations.find((y) => y.id === ed.dataset.edit); if (ob) openObservation({ session: true, edit: ob }); }
+    if (t) { const txt = REC.q.trim(); REC.q = ''; openObservation({ session: true, text: txt }); }
+  };
+}
+/** one tap = one more individual. The first tap creates the observation (time + GPS now); later taps raise its count */
+async function quickAdd(id) {
+  const x = SES(); if (!x) return;
+  const recent = x.observations.filter((o) => o.species_id === id && o._quick && Date.now() - new Date(o.observed_at) < 30 * 60000).pop();
+  if (recent) { recent.count = (+recent.count || 0) + 1; }
+  else {
+    const f = Geo.last && Date.now() - Geo.last.t < 30000 ? Geo.last : null;
+    const o = { id: U.uid(), trip_id: x.id, species_id: id, species_text: '', count: 1, observed_at: new Date().toISOString(), lat: f ? +f.lat.toFixed(6) : x.lat, lng: f ? +f.lng.toFixed(6) : x.lng,
+      accuracy_m: f ? Math.round(f.acc) : x.start_accuracy_m, elevation_m: f ? elev(f) : x.start_elevation_m, location_name: x.location_name || '', state_code: x.state_code, district_code: x.district_code,
+      island_code: x.island_code, region_code: x.region_code, id_confidence: 'certain', evidence: 'direct', mortality: '', origin: 'wild', sex: '', life_stage: '', habitat: '', microhabitat: '', behaviour: '',
+      activity: '', weather: x.weather || '', temperature_c: null, notes: '', privacy: byId(id)?.sensitive ? 'restricted' : U.lsGet('hw_privacy', 'public'), photos: [], _photos: [], _quick: true };
+    if (f) Object.assign(o, await placeOf(f));
+    x.observations.push(o);
+    if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+  }
+  saveSES(x); REC.q = ''; if ($('r-q')) $('r-q').value = '';
+  const c = $('r-done')?.querySelector('.cnt-badge'); if (c) c.textContent = new Set(x.observations.map((o) => o.species_id || o.species_text)).size;
+  paintRecList();
 }
 function paintLive(s, f) {
   if (S.view !== 'record' || !$('r-km')) return;
-  $('r-km').textContent = dist(U.trackKm(s.track)).split(' ')[0];
-  $('r-acc').textContent = f ? `±${Math.round(f.acc)} m` : Geo.err ? 'no GPS' : '…';
+  $('r-km').textContent = dist(U.trackKm(s.track));
+  if ($('r-acc')) $('r-acc').textContent = f ? `±${Math.round(f.acc)} m` : Geo.err ? 'no fix' : '…';
   if (recMap?.m && f) {
     recMap.line.setLatLngs(s.track);
     recMap.me ? recMap.me.setLatLng([f.lat, f.lng]) : (recMap.me = L.circleMarker([f.lat, f.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2b6cb0', fillOpacity: 1 }).addTo(recMap.m));
     if (!recMap.panned) recMap.m.setView([f.lat, f.lng], Math.max(recMap.m.getZoom() || 15, 15));
+  }
+  if (f && s.lat == null) {   // first fix after starting without GPS: fill in the start position
+    const x = SES(); if (x && x.lat == null) { Object.assign(x, { lat: +f.lat.toFixed(6), lng: +f.lng.toFixed(6), start_accuracy_m: Math.round(f.acc), start_elevation_m: elev(f) }); placeOf(f).then((r) => { Object.assign(x, r); saveSES(x); loadLikely(x, true); }); }
   }
 }
 function renderRecordStart() {
@@ -457,46 +552,127 @@ async function startSession(type) {
 function sessionPayload(s, status) {
   const end = s.ended_at || new Date().toISOString();
   const last = s.track[s.track.length - 1];
+  const mins = s.manual_min != null ? +s.manual_min : Math.round(elapsed({ ...s, status: 'paused', paused_at: end }) / 60000);
+  const km = s.manual_km != null ? +s.manual_km : +U.trackKm(s.track).toFixed(2);
   return {
     session: {
       id: s.id, survey_type: s.survey_type, title: s.title, status, started_at: s.started_at, ended_at: status === 'completed' ? end : null,
-      duration_min: Math.round(elapsed({ ...s, status: 'active', paused_at: null }) / 60000), paused_min: Math.round((s.paused_ms || 0) / 60000),
-      distance_km: +U.trackKm(s.track).toFixed(2), observers: s.observers, complete: !!s.complete, track: s.track, lat: s.lat, lng: s.lng,
+      duration_min: Math.max(0, Math.round(mins)), paused_min: Math.round((s.paused_ms || 0) / 60000),
+      distance_km: Math.max(0, +km || 0), observers: s.observers, complete: !!s.complete, track: s.track, lat: s.lat, lng: s.lng,
       start_accuracy_m: s.start_accuracy_m, start_elevation_m: s.start_elevation_m, end_lat: last?.[0] ?? null, end_lng: last?.[1] ?? null,
       location_name: s.location_name || '', region_code: s.region_code || s.state_code || null, state_code: s.state_code, district_code: s.district_code, island_code: s.island_code,
       weather: s.weather || '', notes: s.notes || '',
     },
-    observations: s.observations, removed: s.removed || [], points: s.points,
+    observations: s.observations.map(({ _quick, ...o }) => o), removed: s.removed || [], points: s.points,
   };
 }
-function finishSession() {
-  const s = SES(); if (!s) return;
-  if (s.status === 'paused') { s.paused_ms = (s.paused_ms || 0) + (Date.now() - new Date(s.paused_at)); s.status = 'active'; s.paused_at = null; }
-  s.ended_at = new Date().toISOString(); saveSES(s);
-  const dur = elapsed({ ...s, status: 'paused', paused_at: s.ended_at });
-  openSheet(`<h2>Finish session</h2>
-    <div class="kvgrid"><dt>Survey</dt><dd>${esc(SURVEY_TYPES[s.survey_type])}</dd><dt>Duration</dt><dd>${hms(dur)} (pauses excluded)</dd><dt>Distance</dt><dd>${U.trackKm(s.track).toFixed(2)} km · ${s.points.length} GPS points</dd><dt>Observations</dt><dd>${s.observations.length}</dd></div>
-    <div class="fld"><label for="f-weather">Weather</label><select id="f-weather"><option value="">—</option>${WEATHER.map((w) => `<option ${w === s.weather ? 'selected' : ''}>${w}</option>`).join('')}</select></div>
-    <div class="fld"><label for="f-notes">Session notes</label><textarea id="f-notes" rows="3" placeholder="Conditions, route, people, anything useful">${esc(s.notes || '')}</textarea></div>
-    <label class="row" style="margin-top:12px;gap:10px"><input type="checkbox" id="f-complete" style="width:20px;min-height:20px" ${s.complete ? 'checked' : ''}> <span class="small">I recorded <b>every</b> species I could identify (complete list)</span></label>
-    <button class="btn btn-primary btn-block" id="f-save" style="margin-top:16px;min-height:50px">${I('check')} Save session</button>
-    <div class="row" style="margin-top:8px;gap:8px"><button class="btn btn-ghost grow" id="f-cont">Keep recording</button><button class="btn btn-ghost grow" id="f-discard" style="color:var(--red)">${I('trash-2')} Discard</button></div>`,
-  () => { const x = SES(); if (x && x.ended_at && !x._saving) { x.ended_at = null; saveSES(x); } });
-  $('f-cont').onclick = () => { const x = SES(); x.ended_at = null; saveSES(x); closeSheet(); };
-  $('f-discard').onclick = () => {
+/** "Stop" → are you done? → stop the track → review page → submit */
+function askStop() {
+  openSheet(`<h2 style="font-size:22px">Are you done herping?</h2>
+    <p class="muted" style="margin:8px 0 18px">If you finish now, HerpWatch stops recording your GPS track. Everything else stays editable before you submit.</p>
+    <div class="grid2"><button class="btn btn-ghost big" id="st-keep">Keep herping</button><button class="btn btn-primary big" id="st-stop">Stop track</button></div>`);
+  $('st-keep').onclick = closeSheet;
+  $('st-stop').onclick = () => {
+    const x = SES();
+    if (x.status === 'paused') { x.paused_ms = (x.paused_ms || 0) + (Date.now() - new Date(x.paused_at)); x.paused_at = null; }
+    x.status = 'active'; x.ended_at = new Date().toISOString(); x.stopped = true;
+    x.manual_min = Math.round(elapsed({ ...x, status: 'paused', paused_at: x.ended_at }) / 60000); x.manual_km = +U.trackKm(x.track).toFixed(2);
+    saveSES(x); Geo.stop(onSessionFix); closeSheet(); renderRecord();
+  };
+}
+function renderReview() {
+  const s = SES(), el = $('rec');
+  document.body.classList.add('recording');
+  const sp = {};
+  for (const o of s.observations) { const k = o.species_id || 'txt:' + o.species_text; (sp[k] ||= { k, o, n: 0, obs: [] }); sp[k].n += +o.count || 0; sp[k].obs.push(o); }
+  const list = Object.values(sp);
+  const where = s.location_name || [regionName(s.island_code), regionName(s.district_code), regionName(s.state_code)].filter(Boolean).join(', ');
+  const st = new Date(s.started_at);
+  el.innerHTML = `<div class="rv">
+    <div class="row" style="justify-content:space-between"><button class="ses-ic" id="rv-x" aria-label="Discard session">${I('x')}</button><button class="ses-ic" id="rv-title" aria-label="Rename">${I('pencil')}</button></div>
+    <h1 class="rv-date">${st.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} <span>${fmtTime(st)}</span></h1>
+    ${s.title ? `<p class="muted">${esc(s.title)}</p>` : ''}
+    <button class="rv-loc ${s.lat == null ? 'warn' : ''}" id="rv-loc">${s.lat == null ? `<span class="grow">Choose location</span>${I('triangle-alert')}` : `${I('map-pin')}<span class="grow">${esc(where || `${(+s.lat).toFixed(4)}, ${(+s.lng).toFixed(4)}`)}</span>${I('chevron-right')}`}</button>
+    <div class="rv-card">
+      <div class="row" style="justify-content:space-between"><select id="rv-type" class="rv-type">${Object.entries(SURVEY_TYPES).map(([k, l]) => `<option value="${k}" ${k === s.survey_type ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <div class="rv-eff">
+        <div><label>Observers</label><div class="rv-box"><b id="rv-obs">${s.observers || 1}</b><button id="rv-obsp" aria-label="More observers">${I('plus')}</button></div></div>
+        <div><label for="rv-min">Minutes</label><div class="rv-box"><input id="rv-min" type="number" min="0" inputmode="numeric" value="${s.manual_min ?? ''}">${I('timer')}</div></div>
+        <div><label for="rv-km">${miles() ? 'Miles' : 'Km'}</label><div class="rv-box"><input id="rv-km" type="number" min="0" step="0.01" inputmode="decimal" value="${s.manual_km == null ? '' : miles() ? (s.manual_km * 0.621371).toFixed(2) : s.manual_km}">${I('route')}</div></div>
+      </div>
+    </div>
+    <p style="margin:18px 0 10px">Are you submitting a <b>complete list</b> of the reptiles and amphibians you were able to identify?</p>
+    <div class="pillseg" id="rv-comp"><button data-c="1" class="${s.complete ? 'on' : ''}">Yes</button><button data-c="0" class="${s.complete ? '' : 'on'}">No</button></div>
+    <div class="grid2" style="margin-top:14px"><div class="fld" style="margin:0"><label for="rv-wx">Weather</label><select id="rv-wx"><option value="">—</option>${WEATHER.map((w) => `<option ${w === s.weather ? 'selected' : ''}>${w}</option>`).join('')}</select></div>
+      <div class="fld" style="margin:0"><label>GPS track</label><div class="small muted" style="padding-top:10px">${s.points.length} points${s.track_on === false ? ' (off)' : ''}</div></div></div>
+    <button class="rv-comment" id="rv-cm">${I('message-square')} ${s.notes ? esc(s.notes.slice(0, 80)) + (s.notes.length > 80 ? '…' : '') : 'Add comments'}</button>
+    <div class="row" style="justify-content:space-between;margin-top:18px"><h2>${list.length} species</h2><button class="ses-ic" id="rv-add" aria-label="Add observation">${I('plus')}</button></div>
+    <div class="card" style="margin-top:8px">${list.map((x) => `<button class="obsrow" data-k="${esc(x.k)}"><span class="th"><b class="mono">${x.n}</b></span><span class="grow"><span class="t">${x.o.species_id ? nmHtml(byId(x.o.species_id) || { common: x.o.species_id, sci: '' }) : `<i>${esc(x.o.species_text)}</i>`}</span><br>
+      <span class="s">${x.obs.length} record${x.obs.length > 1 ? 's' : ''} · ${fmtTime(x.obs[0].observed_at)}${x.obs.some((o) => (o._photos || []).length) ? ' · ' + I('camera') : ''}${x.obs.some((o) => o.evidence !== 'direct') ? ' · ' + esc(EVIDENCE[x.obs.find((o) => o.evidence !== 'direct').evidence]) : ''}</span></span>${I('chevron-right')}</button>`).join('') || '<div class="empty small">No observations. You can still submit the session as a record of effort (a “nothing found” survey is useful data).</div>'}</div>
+    <div class="ses-bar"><button class="ses-ic" id="rv-back" aria-label="Back to recording">${I('chevron-right', 'rot-left')}</button><span class="grow"></span><button class="btn btn-primary ses-stop" id="rv-go">Submit</button></div>
+  </div>`;
+  const upd = (fn) => { const x = SES(); fn(x); saveSES(x); };
+  $('rv-type').onchange = (e) => upd((x) => (x.survey_type = e.target.value));
+  $('rv-obsp').onclick = () => upd((x) => { x.observers = (x.observers || 1) + 1; $('rv-obs').textContent = x.observers; });
+  $('rv-obs').onclick = () => upd((x) => { x.observers = Math.max(1, (x.observers || 1) - 1); $('rv-obs').textContent = x.observers; });
+  $('rv-min').onchange = (e) => upd((x) => (x.manual_min = e.target.value === '' ? null : Math.max(0, +e.target.value)));
+  $('rv-km').onchange = (e) => upd((x) => (x.manual_km = e.target.value === '' ? null : Math.max(0, miles() ? +e.target.value / 0.621371 : +e.target.value)));
+  $('rv-wx').onchange = (e) => upd((x) => (x.weather = e.target.value));
+  $('rv-comp').onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) return; upd((x) => (x.complete = b.dataset.c === '1')); renderReview(); };
+  $('rv-cm').onclick = () => {
+    openSheet(`<h3>Comments</h3><textarea id="rn-t" rows="5" style="margin-top:10px" placeholder="Conditions, route, habitat, people, anything useful">${esc(SES().notes || '')}</textarea><button class="btn btn-primary btn-block" id="rn-s" style="margin-top:10px">Save</button>`);
+    $('rn-s').onclick = () => { upd((x) => (x.notes = $('rn-t').value.trim())); closeSheet(); renderReview(); };
+  };
+  $('rv-title').onclick = () => {
+    openSheet(`<h3>Session name</h3><input id="rt-t" style="margin-top:10px" maxlength="120" value="${esc(SES().title || '')}" placeholder="e.g. Chidiyatapu night walk"><button class="btn btn-primary btn-block" id="rt-s" style="margin-top:10px">Save</button>`);
+    $('rt-s').onclick = () => { upd((x) => (x.title = $('rt-t').value.trim())); closeSheet(); renderReview(); };
+  };
+  $('rv-loc').onclick = chooseLocation;
+  $('rv-add').onclick = () => openObservation({ session: true });
+  el.querySelectorAll('[data-k]').forEach((b) => (b.onclick = () => {
+    const x = list.find((y) => y.k === b.dataset.k);
+    if (x.obs.length === 1) return openObservation({ session: true, edit: x.obs[0] });
+    openSheet(`<h3>${esc(spName(x.o))}</h3><div class="card" style="margin-top:10px">${x.obs.map((o) => `<button class="obsrow" data-o="${o.id}"><span class="th"><b class="mono">${o.count}</b></span><span class="grow"><span class="t">${fmtTime(o.observed_at)}</span><br><span class="s">${esc(EVIDENCE[o.evidence] || '')}${o.life_stage ? ' · ' + esc(o.life_stage) : ''}</span></span></button>`).join('')}</div>`);
+    $('sheetbody').querySelectorAll('[data-o]').forEach((c) => (c.onclick = () => { closeSheet(); openObservation({ session: true, edit: x.obs.find((o) => o.id === c.dataset.o) }); }));
+  }));
+  $('rv-back').onclick = () => {   // resume recording: the stopped time doesn't count
+    upd((x) => { x.paused_ms = (x.paused_ms || 0) + (Date.now() - new Date(x.ended_at)); x.ended_at = null; x.stopped = false; x.manual_min = null; x.manual_km = null; });
+    renderRecord(); toast('Recording again');
+  };
+  $('rv-x').onclick = () => {
     if (!confirm(`Discard this session and its ${s.observations.length} observation(s)? This cannot be undone.`)) return;
     for (const o of s.observations) for (const p of o._photos || []) U.photoStore.del(p.id);
-    U.durSet('hw_session', null); Geo.stop(onSessionFix); closeSheet(); toast('Session discarded'); renderRecord();
+    U.durSet('hw_session', null); Geo.stop(onSessionFix); toast('Session discarded'); show('home');
   };
-  $('f-save').onclick = async () => {
-    const x = SES(); x._saving = true; x.weather = $('f-weather').value; x.notes = $('f-notes').value.trim(); x.complete = $('f-complete').checked;
+  $('rv-go').onclick = async () => {
+    const x = SES();
+    if (x.lat == null && !confirm('This session has no location. Submit anyway?')) return;
     const p = sessionPayload(x, 'completed');
-    Geo.stop(onSessionFix);
-    U.durSet('hw_session', null);
-    closeSheet();
+    U.durSet('hw_session', null); REC.q = ''; REC.group = ''; REC.onlyMine = false;
     await queue({ kind: 'session', id: x.id, ...p });
-    toast(S.me?.guest ? 'Session saved on this phone. Sign in to upload it.' : isOnline() ? 'Session saved and uploading' : 'Session saved. It uploads when you are back online.', 4000);
-    show('obs'); obsTab = 'sessions'; renderObs();
+    toast(S.me?.guest ? 'Session saved on this phone. Sign in to upload it.' : isOnline() ? 'Session submitted' : 'Session saved. It uploads when you are back online.', 4000);
+    obsTab = 'sessions'; sesTab = isOnline() && !S.me?.guest ? 'up' : 'phone'; show('obs');
+  };
+}
+/** pick the session location: current GPS, or tap on the map */
+function chooseLocation() {
+  const s = SES();
+  openSheet(`<h3>Session location</h3><p class="small muted" style="margin:4px 0 8px">Tap the map where you were, or use your current GPS position.</p>
+    <div id="locmap" style="height:300px;border-radius:12px"></div>
+    <input id="lc-name" style="margin-top:8px" placeholder="Place name" value="${esc(s.location_name || '')}">
+    <div class="row" style="gap:8px;margin-top:8px"><button class="btn btn-ghost grow" id="lc-gps">${I('crosshair')} Use GPS</button><button class="btn btn-primary grow" id="lc-ok">Save</button></div>`);
+  let pick = s.lat != null ? [s.lat, s.lng] : null;
+  const mm = drawMap('locmap', [], pick ? [{ lat: pick[0], lng: pick[1], label: 'Session' }] : []);
+  let mk = null;
+  if (mm.m) mm.m.on('click', (e) => { pick = [+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]; mk ? mk.setLatLng(pick) : (mk = L.marker(pick).addTo(mm.m)); mm.layer.clearLayers(); });
+  $('lc-gps').onclick = async () => { const f = await Geo.once(0); if (!f) return toast('No GPS fix'); pick = [+f.lat.toFixed(6), +f.lng.toFixed(6)]; if (mm.m) { mk ? mk.setLatLng(pick) : (mk = L.marker(pick).addTo(mm.m)); mm.m.setView(pick, 15); } };
+  $('lc-ok').onclick = async () => {
+    const x = SES();
+    if (pick) { Object.assign(x, { lat: pick[0], lng: pick[1] }, await placeOf({ lat: pick[0], lng: pick[1] })); }
+    x.location_name = $('lc-name').value.trim() || x.location_name;
+    if (pick && !x.location_name) x.location_name = await U.placeName(pick[0], pick[1]);
+    for (const o of x.observations) if (o.lat == null && pick) Object.assign(o, { lat: pick[0], lng: pick[1], state_code: x.state_code, district_code: x.district_code, island_code: x.island_code, region_code: x.region_code, location_name: o.location_name || x.location_name });
+    saveSES(x); closeSheet(); renderReview();
   };
 }
 
@@ -520,7 +696,7 @@ async function openObservation(opts = {}) {
   const base = opts.edit ? JSON.parse(JSON.stringify(opts.edit)) : null;
   const defPrivacy = (typeof S.settings.default_privacy === 'string' ? S.settings.default_privacy : '') || 'public';
   const o = base || {
-    id: U.uid(), trip_id: ses?.id || null, species_id: opts.species || null, species_text: '', count: 1, observed_at: new Date().toISOString(),
+    id: U.uid(), trip_id: ses?.id || null, species_id: opts.species || null, species_text: opts.text || '', count: 1, observed_at: new Date().toISOString(),
     lat: null, lng: null, accuracy_m: null, elevation_m: null, location_name: '', id_confidence: 'certain', evidence: 'direct', mortality: '', origin: 'wild',
     sex: '', life_stage: '', habitat: '', microhabitat: '', behaviour: '', activity: '', weather: ses?.weather || '', temperature_c: null, notes: '',
     privacy: U.lsGet('hw_privacy', defPrivacy), photos: [], _photos: [],
@@ -1104,32 +1280,91 @@ function unlockOffer(pack) {
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-buy]'); if (!b) return; const [pack, region] = b.dataset.buy.split('|'); openStore(region, [pack]); });
 
+/** full-screen species page (under Explore): gallery, description, calls, videos, distribution map, research papers */
+let spPage = { id: null, back: 'explore', map: null };
 function openSpecies(id) {
-  const s = byId(id); if (!s) return;
+  if (!byId(id)) return;
+  closeSheet();
+  spPage = { id, back: S.view === 'species' ? spPage.back : S.view, map: null, y: scrollY };
+  show('species');
+}
+const MEDIA_CACHE = {};
+async function renderSpeciesPage() {
+  const id = spPage.id, s = byId(id), el = $('spp');
+  if (!s) return show('explore');
+  document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'explore'));
   const f = S.unlocked[id];
-  const imgs = (f?.images || []).map((i) => (typeof i === 'string' ? { url: i } : i)).filter((i) => i.url);
-  const kv = (t, v) => (v ? `<div class="kv"><h4>${t}</h4><p>${esc(v)}</p></div>` : '');
-  const regs = (s.regions || []).filter((r) => r.includes('-')).map(regionName);
-  const mine = allMyObs().filter((o) => o.species_id === id && o.review_status !== 'rejected').sort((a, b) => a.observed_at.localeCompare(b.observed_at));
-  openSheet(`
-    <div class="eyebrow">${dot(s.pack)} ${esc([GROUPS[s.group], s.order, s.family].filter(Boolean).join(' · '))}</div>
-    <h2 style="font-size:22px;margin-top:2px">${esc(s.common)}</h2>
-    <div class="sci" style="font-size:15px"><i>${esc(s.sci)}</i> ${esc(f?.authority || '')}</div>
-    <div class="pills" style="margin-top:8px">${pills(s)}</div>
-    ${mine.length ? `<div class="note" style="background:var(--forest-soft)">${I('circle-check')}<span>You have recorded it ${mine.length} time${mine.length > 1 ? 's' : ''}: first ${fmtDate(mine[0].observed_at)}, most recently ${fmtDate(mine[mine.length - 1].observed_at)}.</span></div>` : ''}
-    ${s.venom === 'venomous' ? `<div class="safety venom"><b>${I('triangle-alert')} Venomous: medically significant.</b> Do not handle. After a bite: keep the person still, remove rings and tight items, do not cut or suck the wound or apply a tourniquet, and go straight to a hospital with anti-venom. Emergency: 108.</div>` : ''}
-    ${s.toxic === 'poisonous' ? `<div class="safety" style="background:#f3e3f7;color:#7b2d8e"><b>${I('skull')} Poisonous secretions.</b> Wash hands after contact; keep pets away.</div>` : ''}
-    ${f ? `
-      <div class="gallery">${imgs.length ? imgs.map((i) => `<img src="${esc(i.url)}" alt="${esc(s.common)}" title="${esc(i.credit || '')}">`).join('') : mono(s, true)}</div>
-      ${imgs.some((i) => i.credit) ? `<p class="tiny muted">Photos: ${imgs.map((i) => esc(i.credit || '')).filter(Boolean).join('; ')}</p>` : ''}
-      ${kv('Identification', f.id_notes)}${kv('Size', f.size)}${kv('Habitat', f.habitat)}${kv('Distribution', f.distribution)}${kv('Behaviour & notes', f.behaviour)}${kv('Similar species', f.similar)}
-      <div class="kv"><h4>Conservation</h4><p>IUCN: ${esc(IUCN[s.iucn]?.name || s.iucn)} (${esc(s.iucn)})${s.endemic ? ' · Endemic' : ''}${s.sensitive ? ' · Sensitive: public locations are blurred' : ''}</p></div>
-      ${kv('References', f.refs)}
-      ${regs.length ? `<div class="kv"><h4>On these checklists</h4><p class="small">${regs.map(esc).join(' · ')}</p></div>` : ''}
-      <p class="small" style="margin-top:10px"><a href="feedback.html?species=${encodeURIComponent(s.id)}">${I('flag')} Report a mistake on this page</a></p>`
-    : `<div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)}</p></div>${packsRequired() ? unlockOffer(s.pack) : ''}`}
-    <div class="row" style="margin-top:16px"><button class="btn btn-primary grow" id="sp-rec">${I('plus')} ${SES() ? 'Add to session' : 'Record observation'}</button></div>`);
-  $('sp-rec').onclick = () => { closeSheet(); SES() ? openObservation({ session: true, species: id }) : openObservation({ standalone: true, species: id }); };
+  let media = MEDIA_CACHE[id] || U.lsGet('hw_media_' + id, []);
+  const draw = () => {
+    const base = (f?.images || []).map((i) => (typeof i === 'string' ? { url: i } : i)).filter((i) => i.url);
+    const imgs = [...base, ...media.filter((m) => m.kind === 'image').map((m) => ({ url: m.url, credit: m.credit, license: m.license, caption: m.caption || m.title }))];
+    const videos = media.filter((m) => m.kind === 'video'), calls = media.filter((m) => m.kind === 'audio'), papers = media.filter((m) => m.kind === 'paper');
+    const mine = allMyObs().filter((o) => o.species_id === id && o.review_status !== 'rejected').sort((a, b) => a.observed_at.localeCompare(b.observed_at));
+    const desc = [f?.id_notes, f?.behaviour].filter(Boolean).join(' ');
+    const kv = (t, v) => (v ? `<div class="kv"><h4>${t}</h4><p>${esc(v)}</p></div>` : '');
+    const isVid = (u) => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(u);
+    const yt = (u) => (u.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/) || [])[1];
+    el.innerHTML = `
+      <div class="sp-hero">
+        <div class="sp-gal" id="sp-gal">${imgs.length ? imgs.map((i) => `<figure><img src="${esc(i.url)}" alt="${esc(s.common)}" loading="lazy">${i.credit || i.caption ? `<figcaption>${esc([i.caption, i.credit && '© ' + i.credit, i.license].filter(Boolean).join(' · '))}</figcaption>` : ''}</figure>`).join('') : `<figure class="nophoto">${mono(s, true)}</figure>`}</div>
+        <button class="sp-fab l" id="sp-back" aria-label="Back">${I('arrow-right', 'rot-left')}</button>
+        <button class="sp-fab r" id="sp-share" aria-label="Share">${I('share')}</button>
+      </div>
+      <div class="sp-count"><span id="sp-n">${imgs.length ? '1' : '0'} of ${imgs.length}</span></div>
+      <div class="sp-body">
+        <div class="eyebrow">${dot(s.pack)} ${esc([GROUPS[s.group], s.order, s.family].filter(Boolean).join(' · '))}</div>
+        <div class="row" style="align-items:flex-start;gap:12px"><div class="grow"><h1 class="sp-name">${esc(s.common)}</h1><div class="sp-sci"><i>${esc(s.sci)}</i> ${esc(f?.authority || '')}</div></div>
+          ${calls.length ? `<button class="sp-sound" id="sp-play" aria-label="Play call">${I('play')}</button>` : ''}</div>
+        <div class="pills" style="margin-top:10px">${pills(s)}</div>
+        ${mine.length ? `<div class="note" style="background:var(--forest-soft)">${I('circle-check')}<span>You have recorded it ${mine.length} time${mine.length > 1 ? 's' : ''}: first ${fmtDate(mine[0].observed_at)}, most recently ${fmtDate(mine[mine.length - 1].observed_at)}.</span></div>` : ''}
+        ${s.venom === 'venomous' ? `<div class="safety venom"><b>${I('triangle-alert')} Venomous: medically significant.</b> Do not handle. After a bite: keep the person still, remove rings and tight items, do not cut or suck the wound or apply a tourniquet, and go straight to a hospital with anti-venom. Emergency: 108.</div>` : ''}
+        ${s.toxic === 'poisonous' ? `<div class="safety" style="background:#f3e3f7;color:#7b2d8e"><b>${I('skull')} Poisonous secretions.</b> Wash hands after contact; keep pets away.</div>` : ''}
+        ${f ? `${desc ? `<p class="sp-desc">${esc(desc)}</p>` : ''}` : packsRequired() ? unlockOffer(s.pack) : ''}
+        ${calls.length ? `<h2 class="sp-h">Calls</h2>${calls.map((c, i) => `<div class="sp-audio"><b>${esc(c.title || 'Call ' + (i + 1))}</b><audio controls preload="none" src="${esc(c.url)}" ${i === 0 ? 'id="sp-a0"' : ''}></audio><span class="tiny muted">${esc([c.caption, c.credit && '© ' + c.credit, c.license].filter(Boolean).join(' · '))}</span></div>`).join('')}` : ''}
+        ${videos.length ? `<h2 class="sp-h">Videos</h2>${videos.map((v) => `<div class="sp-video">${yt(v.url) ? `<iframe src="https://www.youtube-nocookie.com/embed/${yt(v.url)}" title="${esc(v.title)}" allowfullscreen loading="lazy"></iframe>` : isVid(v.url) ? `<video controls preload="metadata" src="${esc(v.url)}"></video>` : `<a class="btn btn-ghost btn-block" href="${esc(v.url)}" target="_blank" rel="noopener">${I('play')} ${esc(v.title || 'Watch video')}</a>`}
+          <p class="tiny muted">${esc([v.title, v.credit && '© ' + v.credit, v.license].filter(Boolean).join(' · '))}</p></div>`).join('')}` : ''}
+        <h2 class="sp-h">Distribution</h2>
+        <div id="sp-map" class="minimap" style="height:300px"></div>
+        <div class="legend" style="margin-top:6px"><span><i style="background:#7fb3d5"></i>On the checklist</span><span><i style="background:#e8956b"></i>Endemic here</span><span><i style="background:#c53030"></i>Public records</span></div>
+        ${f ? kv('Distribution notes', f.distribution) : ''}
+        ${f ? `${kv('Habitat', f.habitat)}${kv('Size', f.size)}${kv('Similar species', f.similar)}` : ''}
+        <div class="kv"><h4>Conservation</h4><p>IUCN: ${esc(IUCN[s.iucn]?.name || s.iucn)} (${esc(s.iucn)})${s.endemic ? ' · Endemic' : ''}${s.sensitive ? ' · Sensitive: public locations are blurred' : ''}</p></div>
+        ${papers.length || f?.refs ? `<h2 class="sp-h">Research & references</h2><div class="card">${papers.map((p) => `<a class="paper" href="${esc(p.doi ? (p.doi.startsWith('http') ? p.doi : 'https://doi.org/' + p.doi) : p.url)}" target="_blank" rel="noopener">${I(/\.pdf(\?|$)/i.test(p.url) ? 'file-text' : 'book-open')}<span class="grow"><b>${esc(p.title || 'Paper')}</b>${p.year ? ` <span class="muted">(${p.year})</span>` : ''}<br><span class="tiny muted">${esc(p.citation || p.caption || '')}${p.doi ? ' · doi:' + esc(p.doi.replace(/^https?:\/\/doi\.org\//, '')) : ''}</span></span>${I('chevron-right')}</a>`).join('')}
+          ${f?.refs ? `<p class="small muted" style="padding:10px 12px">${esc(f.refs)}</p>` : ''}</div>` : ''}
+        ${(s.regions || []).filter((r) => r.includes('-')).length ? `<div class="kv"><h4>On these checklists</h4><p class="small">${(s.regions || []).filter((r) => r.includes('-')).map((r) => esc(regionName(r))).join(' · ')}</p></div>` : ''}
+        <p class="small" style="margin-top:14px"><a href="feedback.html?species=${encodeURIComponent(s.id)}">${I('flag')} Report a mistake on this page</a></p>
+        <button class="btn btn-primary btn-block" id="sp-rec" style="margin:16px 0 8px;min-height:50px">${I('plus')} ${SES() && !SES().stopped ? 'Add to session' : 'Record observation'}</button>
+      </div>`;
+    $('sp-back').onclick = () => { const b = spPage.back || 'explore'; show(b === 'species' ? 'explore' : b); };
+    $('sp-share').onclick = async () => { const url = location.href.split('#')[0] + '#species'; const text = `${s.common} (${s.sci}) on ${HW.C.APP_NAME}`; try { if (navigator.share) await navigator.share({ title: s.common, text, url }); else { await navigator.clipboard.writeText(`${text}`); toast('Copied'); } } catch {} };
+    $('sp-play') && ($('sp-play').onclick = () => { const a = $('sp-a0'); if (!a) return; a.paused ? a.play() : a.pause(); });
+    $('sp-rec').onclick = () => { const x = SES(); x && !x.stopped ? (show('record'), openObservation({ session: true, species: id })) : openObservation({ standalone: true, species: id }); };
+    const gal = $('sp-gal');
+    gal.onscroll = () => { const i = Math.round(gal.scrollLeft / gal.clientWidth); $('sp-n').textContent = `${Math.min(imgs.length, i + 1)} of ${imgs.length}`; };
+    drawDistribution(s);
+  };
+  draw();
+  if (isOnline() && S.me && !S.me.guest) {
+    try { const m = await api.speciesMedia(id); MEDIA_CACHE[id] = m; try { U.lsSet('hw_media_' + id, m); } catch {} if (JSON.stringify(m) !== JSON.stringify(media) && S.view === 'species' && spPage.id === id) { media = m; draw(); } } catch {}
+  }
+}
+async function drawDistribution(s) {
+  if (spPage.map) { try { spPage.map.m.remove(); } catch {} }
+  const m = drawMap('sp-map', [], []); spPage.map = m;
+  if (!m.m) return;
+  const rad = { country: 0, state: 120000, ut: 60000, district: 30000, island: 9000, region: 40000, protected_area: 8000 };
+  const pts = [];
+  for (const code of s.regions || []) {
+    const r = regionOf(code); if (!r || r.lat == null || !rad[r.kind]) continue;
+    const endemic = s.endemic && r.kind !== 'country';
+    L.circle([+r.lat, +r.lng], { radius: rad[r.kind], color: endemic ? '#e8956b' : '#7fb3d5', weight: 1, fillColor: endemic ? '#e8956b' : '#7fb3d5', fillOpacity: 0.45 }).bindPopup(esc(r.name)).addTo(m.layer);
+    pts.push([+r.lat, +r.lng]);
+  }
+  try {
+    const obs = await api.publicObservations({ species: s.id, limit: 2000 });
+    for (const o of obs) { L.circleMarker([o.lat, o.lng], { radius: 4, color: '#fff', weight: 1, fillColor: '#c53030', fillOpacity: 0.9 }).bindPopup(`${fmtDate(o.observed_at)}${o.location_name ? ' · ' + esc(o.location_name) : ''}`).addTo(m.layer); pts.push([o.lat, o.lng]); }
+  } catch {}
+  if (pts.length > 1) m.m.fitBounds(pts, { padding: [20, 20], maxZoom: 8 }); else if (pts.length) m.m.setView(pts[0], 7); else m.m.setView([22.5, 82], 4);
 }
 
 // ── store (pick only the packs you want) ──

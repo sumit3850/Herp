@@ -1,5 +1,6 @@
 import * as React from "react";
-import { BookOpen, Download, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import { BookOpen, Download, Images, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import { MediaDialog } from "@/pages/species-media";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -24,6 +25,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
   const [pack, setPack] = React.useState("");
   const [edit, setEdit] = React.useState<Species | null>(startNew && packs[0] ? blank(packs[0].id) : null);
   const [importing, setImporting] = React.useState(false);
+  const [mediaFor, setMediaFor] = React.useState<Species | null>(null);
   React.useEffect(() => { if (startNew && packs[0] && !edit) setEdit(blank(packs[0].id)); }, [startNew, packs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = species.filter((s) => (!pack || s.pack === pack) && (!q || `${s.common} ${s.sci} ${s.family}`.toLowerCase().includes(q.toLowerCase())));
@@ -59,11 +61,14 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
                   <TableCell className="text-right font-mono text-sm">{s.regions?.length || 0}</TableCell>
                   <TableCell className="text-right font-mono text-sm">{s.images?.length || 0}</TableCell>
                   <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                    <Button size="sm" variant="ghost" title="Photos, videos, calls, research papers" onClick={() => setMediaFor(s)}><Images /> Media</Button>
                     {isReviewer && <Button size="sm" variant="ghost" title="Update distribution, conservation, photos" onClick={() => setEdit(s)}><Pencil /> Annotate</Button>}
-                    {isAdmin && <div className="flex justify-end gap-1">
+                    {isAdmin && <>
                       <Button size="icon" variant="ghost" className="size-8" title="Edit" onClick={() => setEdit(s)}><Pencil /></Button>
                       <Button size="icon" variant="ghost" className="size-8 hover:text-destructive" title="Delete" onClick={() => { if (confirm(`Delete ${s.common}? It is removed from every checklist; past sightings keep their record but lose the link.`)) act(async () => { await hw.api.admin.deleteSpecies(s.id); await reload(["catalog"]); }, "Species deleted"); }}><Trash2 /></Button>
-                    </div>}
+                    </>}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -73,6 +78,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
       </Card>
       {edit && <SpeciesForm initial={edit} onClose={() => setEdit(null)} />}
       <ImportDialog open={importing} onClose={() => setImporting(false)} />
+      {mediaFor && <MediaDialog species={mediaFor} onClose={() => setMediaFor(null)} />}
     </div>
   );
 }

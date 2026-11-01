@@ -244,7 +244,8 @@ async function storage(req, res, rest_) {
   if (!file.startsWith(STORE)) return send(res, 400, { message: 'bad path' });
   if (req.method === 'GET') {
     if (!fs.existsSync(file)) return send(res, 404, { message: 'Object not found' });
-    res.writeHead(200, { ...cors, 'content-type': 'image/jpeg' }); return fs.createReadStream(file).pipe(res);
+    const ext = path.extname(file).slice(1).toLowerCase(); const types = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', pdf: 'application/pdf' };
+    res.writeHead(200, { ...cors, 'content-type': types[ext] || 'application/octet-stream' }); return fs.createReadStream(file).pipe(res);
   }
   if (req.method === 'POST' || req.method === 'PUT') {
     const c = claimsOf(req);

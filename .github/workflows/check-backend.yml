@@ -4,6 +4,9 @@ name: Check backend (read-only)
 # (public publishable key only, no secrets) and reports whether the back end is ready.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["config.js", ".github/workflows/check-backend.yml"]
 
 jobs:
   check:

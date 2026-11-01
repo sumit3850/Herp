@@ -7,29 +7,31 @@
 <meta name="theme-color" content="#1f5b3c">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Calistoga&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="style.css">
 <style>
 body{padding-bottom:calc(72px + env(safe-area-inset-bottom))}
-header.top{position:sticky;top:0;z-index:40;background:var(--forest);color:#fff;padding:calc(10px + env(safe-area-inset-top)) 16px 10px;display:flex;align-items:center;gap:10px}
-:root[data-theme="dark"] header.top{background:#12301f}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) header.top{background:#12301f}}
-header.top .brand{font-family:var(--display);font-size:20px;line-height:1}
-header.top select{width:auto;max-width:48vw;min-height:34px;padding:4px 8px;background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.25);font-size:13px}
-header.top select option{color:#000}
-.sync{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;opacity:.9}
-.dot{width:8px;height:8px;border-radius:50%;background:#9ae6b4}.dot.off{background:#fbd38d}.dot.pending{background:#f6ad55}
+header.top{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);color:var(--ink);padding:calc(10px + env(safe-area-inset-top)) 16px 10px;display:flex;align-items:center;gap:10px}
+header.top .brand{display:flex;align-items:center;gap:8px;font-weight:650;font-size:17px;letter-spacing:-.02em;line-height:1}
+header.top .brand img{width:28px;height:28px;border-radius:8px}
+header.top select{width:auto;max-width:44vw;min-height:36px;padding:4px 10px;font-size:13.5px;font-weight:550;border-radius:10px}
+.iconbtn{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft)}
+.iconbtn:hover{color:var(--forest-2);border-color:var(--forest-2)}
+.iconbtn .ic{width:18px;height:18px}
+.sync{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-soft)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--forest-2)}.dot.off{background:var(--muted)}.dot.pending{background:var(--amber)}
 main{max-width:760px;margin:0 auto;padding:14px 16px}
 nav.tabs{position:fixed;bottom:0;left:0;right:0;z-index:50;background:var(--surface);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom)}
 nav.tabs button{padding:8px 2px 9px;font-size:11px;font-weight:600;color:var(--ink-soft);display:flex;flex-direction:column;align-items:center;gap:2px}
-nav.tabs button .i{font-size:20px;line-height:1.1}
+nav.tabs button .i{display:grid;place-items:center;height:24px}nav.tabs button .i .ic{width:21px;height:21px}
 nav.tabs button.on{color:var(--forest-2)}
 .view{display:none}.view.on{display:block}
 .search{position:relative;margin-bottom:10px}.search input{padding-left:36px}
-.search::before{content:"⌕";position:absolute;left:12px;top:8px;font-size:18px;color:var(--muted)}
+.search::before{content:"";position:absolute;left:13px;top:50%;width:17px;height:17px;transform:translateY(-50%);background:var(--muted);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E") center/contain no-repeat}
 .splist{display:flex;flex-direction:column;gap:8px}
 .sp{display:flex;gap:12px;align-items:center;padding:10px;text-align:left;width:100%}
 .sp .th{width:64px;height:64px;border-radius:10px;overflow:hidden;flex-shrink:0;background:var(--forest-soft)}
@@ -63,7 +65,7 @@ nav.tabs button.on{color:var(--forest-2)}
 #rkmap,#tripmap{height:260px;border-radius:12px;margin:10px 0;z-index:1}
 .bigbtn{width:100%;padding:20px;border-radius:16px;font-size:18px;font-weight:700;background:var(--red);color:#fff;box-shadow:var(--shadow)}
 .opt{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);font-weight:600}
-.opt .e{font-size:32px}.opt.on{border-color:var(--forest-2);background:var(--forest-soft)}
+.opt .e{width:14px;height:14px;border-radius:50%;background:var(--pc)}.opt.on{border-color:var(--forest-2);background:var(--forest-soft)}
 .steps{display:flex;gap:4px;margin:6px 0 12px}.steps i{flex:1;height:4px;border-radius:2px;background:var(--line)}.steps i.on{background:var(--forest-2)}
 /* ── motion (matches the dashboard's SignInPage) ── */
 @keyframes fadeSlideIn{to{opacity:1;filter:blur(0);transform:none}}
@@ -89,7 +91,7 @@ body.authing main{max-width:none;padding:0}
 .glass input,.glass select{border:0;background:transparent;border-radius:16px;padding:14px 16px;min-height:50px}
 .glass input:focus,.glass select:focus{outline:none}
 .glass.pw{position:relative}.glass.pw input{padding-right:48px}
-.eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:16px;opacity:.6;padding:6px}
+.eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);opacity:.6;padding:6px;color:var(--ink-soft)}.eye .ic{width:19px;height:19px}
 .linkbtn{color:var(--forest-2);font-size:13.5px;font-weight:600}
 .btn.big{min-height:52px;border-radius:16px;font-size:15px}
 .orline{position:relative;text-align:center;margin:10px 0 2px;font-size:13px;color:var(--ink-soft)}
@@ -99,7 +101,7 @@ body.authing main{max-width:none;padding:0}
 .hero-img{position:absolute;inset:16px;border-radius:28px;background:url(assets/hero-herp.svg) center/cover;animation:slideRightIn .6s ease-out .3s forwards;opacity:0;filter:blur(4px);transform:translateX(-20px)}
 .hero-cards{position:absolute;bottom:34px;left:0;right:0;display:flex;gap:14px;justify-content:center;padding:0 32px}
 .hcard{display:flex;gap:12px;align-items:flex-start;width:260px;padding:16px;border-radius:24px;background:rgba(255,255,255,.18);backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,.22);color:#fff;font-size:13px;line-height:1.35;animation:fadeSlideIn .6s ease-out forwards;opacity:0;filter:blur(4px);transform:translateY(20px) scale(.96)}
-.hcard .he{font-size:22px;background:rgba(255,255,255,.85);border-radius:14px;width:40px;height:40px;display:grid;place-items:center;flex-shrink:0}
+.hcard .he{background:rgba(255,255,255,.92);color:#1f5b3c;border-radius:12px;width:40px;height:40px;display:grid;place-items:center;flex-shrink:0}.hcard .he .ic{width:20px;height:20px}
 .hcard small{display:block;opacity:.8}.hcard p{margin-top:4px;opacity:.95}
 .hcard.t1{animation-delay:1s}.hcard.t2{animation-delay:1.2s;display:none}.hcard.t3{animation-delay:1.4s;display:none}
 @media(min-width:900px){.auth-hero{display:block}}
@@ -108,10 +110,14 @@ body.authing main{max-width:none;padding:0}
 /* ── desktop: bottom tabs become a left rail ── */
 @media(min-width:1024px){
   body:not(.authing){padding-bottom:0;padding-left:232px}
-  nav.tabs{top:0;right:auto;width:232px;border-top:0;border-right:1px solid var(--line);grid-template-columns:1fr;grid-auto-rows:min-content;align-content:start;padding:0 12px 20px;gap:4px}
-  nav.tabs::before{content:attr(data-brand);display:flex;align-items:center;height:62px;padding:0 10px;margin-bottom:10px;font-family:var(--display);font-size:22px;color:var(--forest-2);border-bottom:1px solid var(--line)}
+  body:not(.authing) header.top,body:not(.authing) #demo{margin-left:-232px;position:relative;z-index:60}
+  body:not(.authing) header.top{position:sticky;padding-left:20px}
+  header.top .brand{width:200px}
+  nav.tabs{top:0;z-index:30;padding-top:calc(var(--topoff,0px) + 72px)!important;right:auto;width:232px;border-top:0;border-right:1px solid var(--line);grid-template-columns:1fr;grid-auto-rows:min-content;align-content:start;padding:0 12px 20px;gap:4px}
+  nav.tabs::before{content:'';display:block;height:0}
+  header.top .brand{min-width:0}
   nav.tabs button{flex-direction:row;justify-content:flex-start;gap:12px;font-size:14.5px;padding:10px 12px;border-radius:10px;transition:background .15s}
-  nav.tabs button .i{font-size:18px}
+  nav.tabs button .i .ic{width:19px;height:19px}
   nav.tabs button:hover{background:var(--surface-2)}
   nav.tabs button.on{background:var(--forest-soft)}
   main{max-width:920px;padding:22px 28px}
@@ -129,9 +135,10 @@ body.authing main{max-width:none;padding:0}
 <body>
 <div id="demo" class="demo-banner hidden">Demo mode — data stays in this browser. Sign in as <b>field@demo / field</b> or <b>admin@demo / admin</b>.</div>
 <header class="top">
-  <span class="brand" id="brand">HerpWatch</span>
+  <span class="brand"><img src="assets/icon.svg" alt=""><span id="brand">HerpWatch</span></span>
   <select id="region" aria-label="Region"></select>
   <span class="sync" id="sync"><span class="dot" id="syncdot"></span><span id="synctxt">online</span></span>
+  <button class="iconbtn" data-install title="Install app" aria-label="Install app"></button>
 </header>
 
 <main>
@@ -146,7 +153,7 @@ body.authing main{max-width:none;padding:0}
           <div class="tabs2 ae d3" role="tablist"><button id="t-in" class="on" role="tab">Sign in</button><button id="t-up" role="tab">Create account</button></div>
           <form id="f-in">
             <div class="ae d3"><label class="f" for="in-email">Email or username</label><div class="glass"><input id="in-email" autocomplete="username" placeholder="Enter your email or username" required></div></div>
-            <div class="ae d4"><label class="f" for="in-pw">Password</label><div class="glass pw"><input id="in-pw" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="eye" data-eye="in-pw" aria-label="Show password">👁</button></div></div>
+            <div class="ae d4"><label class="f" for="in-pw">Password</label><div class="glass pw"><input id="in-pw" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="eye" data-eye="in-pw" aria-label="Show password" data-ic="eye"></button></div></div>
             <div class="row ae d5" style="justify-content:flex-end;margin-top:8px"><button type="button" class="linkbtn" id="forgot">Reset password</button></div>
             <button class="btn btn-primary btn-block big ae d6" style="margin-top:12px">Sign in</button>
           </form>
@@ -156,7 +163,7 @@ body.authing main{max-width:none;padding:0}
             <div class="ae d2"><label class="f" for="up-email">Email</label><div class="glass"><input id="up-email" type="email" autocomplete="email" placeholder="Enter your email address" required></div></div>
             <div class="grid2 ae d3"><div><label class="f" for="up-phone">Phone (optional)</label><div class="glass"><input id="up-phone" type="tel" autocomplete="tel" placeholder="+91…"></div></div>
               <div><label class="f" for="up-region">Home state</label><div class="glass"><select id="up-region"></select></div></div></div>
-            <div class="ae d4"><label class="f" for="up-pw">Password</label><div class="glass pw"><input id="up-pw" type="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" required><button type="button" class="eye" data-eye="up-pw" aria-label="Show password">👁</button></div></div>
+            <div class="ae d4"><label class="f" for="up-pw">Password</label><div class="glass pw"><input id="up-pw" type="password" minlength="6" autocomplete="new-password" placeholder="At least 6 characters" required><button type="button" class="eye" data-eye="up-pw" aria-label="Show password" data-ic="eye"></button></div></div>
             <button class="btn btn-primary btn-block big ae d5" style="margin-top:14px">Create account</button>
           </form>
           <div class="orline ae d7"><span>Or continue with</span></div>
@@ -167,9 +174,9 @@ body.authing main{max-width:none;padding:0}
       <div class="auth-hero" aria-hidden="true">
         <div class="hero-img"></div>
         <div class="hero-cards">
-          <div class="hcard t1"><span class="he">📖</span><div><b>Offline field guide</b><small>Safety info always free</small><p>Venomous &amp; poisonous flags, IUCN status, habitat and distribution for every species.</p></div></div>
-          <div class="hcard t2"><span class="he">📝</span><div><b>eBird-style checklists</b><small>Timed · GPS-tracked</small><p>Counts, life stage and photos, and it syncs when you’re back online.</p></div></div>
-          <div class="hcard t3"><span class="he">🛣️</span><div><b>Road-kill logger</b><small>Tracks + points</small><p>Survey effort is recorded, so results come out as kills per 100 km.</p></div></div>
+          <div class="hcard t1"><span class="he" data-ic="book-open"></span><div><b>Offline field guide</b><small>Safety info always free</small><p>Venomous &amp; poisonous flags, IUCN status, habitat and distribution for every species.</p></div></div>
+          <div class="hcard t2"><span class="he" data-ic="clipboard-list"></span><div><b>eBird-style checklists</b><small>Timed · GPS-tracked</small><p>Counts, life stage and photos, and it syncs when you’re back online.</p></div></div>
+          <div class="hcard t3"><span class="he" data-ic="route"></span><div><b>Road-kill logger</b><small>Tracks + points</small><p>Survey effort is recorded, so results come out as kills per 100 km.</p></div></div>
         </div>
       </div>
     </div>
@@ -198,11 +205,11 @@ body.authing main{max-width:none;padding:0}
 </main>
 
 <nav class="tabs" id="tabs">
-  <button data-v="guide" class="on"><span class="i">📖</span>Guide</button>
-  <button data-v="identify"><span class="i">🔍</span>Identify</button>
-  <button data-v="record"><span class="i">📝</span>Record</button>
-  <button data-v="roadkill"><span class="i">🛣️</span>Road-kill</button>
-  <button data-v="me"><span class="i">👤</span>Me</button>
+  <button data-v="guide" class="on"><span class="i" data-ic="book-open"></span>Guide</button>
+  <button data-v="identify"><span class="i" data-ic="scan-search"></span>Identify</button>
+  <button data-v="record"><span class="i" data-ic="clipboard-list"></span>Record</button>
+  <button data-v="roadkill"><span class="i" data-ic="route"></span>Road-kill</button>
+  <button data-v="me"><span class="i" data-ic="user"></span>Me</button>
 </nav>
 
 <div class="scrim" id="scrim"></div>
@@ -211,6 +218,8 @@ body.authing main{max-width:none;padding:0}
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="assets/icons.js"></script>
+<script src="install.js"></script>
 <script src="config.js"></script>
 <script src="data/seed.js"></script>
 <script src="common.js"></script>
@@ -236,19 +245,27 @@ function openSheet(html) { $('sheetbody').innerHTML = html; $('sheet').classList
 function closeSheet() { $('sheet').classList.remove('on'); $('scrim').classList.remove('on'); }
 $('scrim').onclick = closeSheet; $('sheetx').onclick = closeSheet;
 
+const I = (n, c = '') => (window.HWI ? HWI(n, c) : '');
+const dot = (p) => `<span class="gdot" style="--pc:${packOf(p).color}"></span>`;
+const VICON = { venomous: 'triangle-alert', mild: 'info', non: 'circle-check' };
+// specimen-label monogram (e.g. "Nn" for Naja naja) until a licensed photo is added
+function mono(s, hero) {
+  const [g = '', sp = ''] = (s.sci || '').split(' ');
+  return `<div class="mono-thumb${hero ? ' mono-hero' : ''}" style="--pc:${packOf(s.pack).color}"><b>${esc(g[0] || '')}${esc(sp[0] || '')}</b><small>${esc(hero ? s.family + ' · ' + packOf(s.pack).name : s.family)}</small></div>`;
+}
 function pills(s) {
   const iu = IUCN[s.iucn] || IUCN.NE;
   let h = `<span class="pill iucn" style="background:${iu.color}" title="${esc(iu.name)}">IUCN ${esc(s.iucn)}</span>`;
-  if (s.pack === 'snakes' || s.venom !== 'non') h += `<span class="pill ${s.venom === 'venomous' ? 'venom' : s.venom === 'mild' ? 'mild' : 'safe'}">${VENOM[s.venom].icon} ${VENOM[s.venom].short}</span>`;
-  if (s.toxic === 'poisonous') h += `<span class="pill poison">☠ Poisonous</span>`;
+  if (s.pack === 'snakes' || s.venom !== 'non') h += `<span class="pill ${s.venom === 'venomous' ? 'venom' : s.venom === 'mild' ? 'mild' : 'safe'}">${I(VICON[s.venom])} ${VENOM[s.venom].short}</span>`;
+  if (s.toxic === 'poisonous') h += `<span class="pill poison">${I('skull')} Poisonous</span>`;
   if (s.endemic) h += `<span class="pill end">Endemic</span>`;
-  if (!isUnlocked(s.id)) h += `<span class="pill lock">🔒 ${esc(packOf(s.pack).name)}</span>`;
+  if (!isUnlocked(s.id)) h += `<span class="pill lock">${I('lock')} ${esc(packOf(s.pack).name)}</span>`;
   return h;
 }
 function thumb(s) {
   const full = S.unlocked[s.id], img = full?.images?.[0];
   const url = typeof img === 'string' ? img : img?.url;
-  return url ? `<img src="${esc(url)}" alt="" loading="lazy">` : `<div class="sil">${U.silhouette(s.pack, packOf(s.pack).color)}</div>`;
+  return url ? `<img src="${esc(url)}" alt="" loading="lazy">` : mono(s);
 }
 const nameHtml = (s) => `${esc(s.common)} <span class="sci">(<i>${esc(s.sci)}</i>)</span>`;
 
@@ -368,7 +385,7 @@ $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) show(b
 $('region').onchange = async (e) => { S.region = e.target.value; U.lsSet('hw_region', S.region); await loadChecklist(); show(S.view); };
 
 // ═════════════════════════ GUIDE ═════════════════════════
-const FILTERS = [['venomous', '⚠ Venomous'], ['poisonous', '☠ Poisonous'], ['threatened', 'Threatened (CR/EN/VU)'], ['endemic', 'Endemic'], ['unlocked', 'Unlocked']];
+const FILTERS = [['venomous', 'Venomous'], ['poisonous', 'Poisonous'], ['threatened', 'Threatened (CR/EN/VU)'], ['endemic', 'Endemic'], ['unlocked', 'Unlocked']];
 function guideList() {
   const cl = new Set(S.checklist), q = S.q.trim().toLowerCase(), f = S.filters;
   return S.index.filter((s) => cl.has(s.id)
@@ -380,8 +397,8 @@ function guideList() {
     .sort((a, b) => S.packs.findIndex((p) => p.id === a.pack) - S.packs.findIndex((p) => p.id === b.pack) || a.common.localeCompare(b.common));
 }
 function renderGuide() {
-  $('packchips').innerHTML = [['all', 'All groups'], ...S.packs.map((p) => [p.id, p.emoji + ' ' + p.name])]
-    .map(([id, l]) => `<button class="chip ${S.pack === id ? 'on' : ''}" data-p="${id}">${esc(l)}</button>`).join('');
+  $('packchips').innerHTML = [['all', 'All groups'], ...S.packs.map((p) => [p.id, p.name])]
+    .map(([id, l]) => `<button class="chip ${S.pack === id ? 'on' : ''}" data-p="${id}">${id === 'all' ? '' : dot(id)}${esc(l)}</button>`).join('');
   $('filterchips').innerHTML = FILTERS.map(([id, l]) => `<button class="chip ${S.filters.has(id) ? 'on' : ''}" data-f="${id}">${esc(l)}</button>`).join('');
   const list = guideList();
   $('guidecount').textContent = `${list.length} species · checklist for ${regionName(S.region)}`;
@@ -398,7 +415,7 @@ function unlockOffer(pack) {
   const opts = [];
   try { if (isState) opts.push({ region: S.region, ...U.quoteFrom(S.prices, [{ pack, region: S.region }]) }); } catch {}
   try { opts.push({ region: country, ...U.quoteFrom(S.prices, [{ pack, region: country }]) }); } catch {}
-  return `<div class="locked"><b>🔒 Unlock the ${esc(packOf(pack).name)} pack</b>
+  return `<div class="locked"><b class="row" style="gap:8px">${I('lock')} Unlock the ${esc(packOf(pack).name)} pack</b>
     <p class="small muted" style="margin:4px 0 10px">Photos, identification notes, habitat, distribution and the Identify wizard for every species in the pack. Safety info (venomous / poisonous) is always free.</p>
     <div class="row wrap">${opts.map((o) => `<button class="btn btn-primary btn-sm" data-buy="${pack}|${o.region}">${esc(regionName(o.region))} — ${U.rupees(o.total)}/yr</button>`).join('') || '<span class="small muted">No price set for this region yet.</span>'}</div></div>`;
 }
@@ -414,21 +431,21 @@ function openSpecies(id) {
   const kv = (t, v) => (v ? `<div class="kv"><h4>${t}</h4><p>${esc(v)}</p></div>` : '');
   const regions = (s.regions || []).filter((r) => r !== 'IN' && r.includes('-')).map(regionName);
   openSheet(`
-    <div class="eyebrow">${esc(packOf(s.pack).emoji + ' ' + packOf(s.pack).name)} · ${esc(s.family)}</div>
+    <div class="eyebrow">${dot(s.pack)} ${esc(packOf(s.pack).name)} · ${esc(s.family)}</div>
     <h2 style="font-size:22px;margin-top:2px">${esc(s.common)}</h2>
     <div class="sci" style="font-size:15px"><i>${esc(s.sci)}</i></div>
     <div class="pills" style="margin-top:8px">${pills(s)}</div>
-    ${s.venom === 'venomous' ? `<div class="safety venom"><b>⚠ Venomous — medically significant.</b> Do not handle. In case of a bite: keep the person still, remove rings/tight items, do not cut or suck the wound or apply a tourniquet, and go to the nearest hospital with anti-venom. Emergency: 108.</div>` : ''}
-    ${s.toxic === 'poisonous' ? `<div class="safety" style="background:#f3e3f7;color:#7b2d8e"><b>☠ Poisonous secretions.</b> Wash hands after contact; keep pets away.</div>` : ''}
+    ${s.venom === 'venomous' ? `<div class="safety venom"><b>${I('triangle-alert')} Venomous: medically significant.</b> Do not handle. In case of a bite: keep the person still, remove rings/tight items, do not cut or suck the wound or apply a tourniquet, and go to the nearest hospital with anti-venom. Emergency: 108.</div>` : ''}
+    ${s.toxic === 'poisonous' ? `<div class="safety" style="background:#f3e3f7;color:#7b2d8e"><b>${I('skull')} Poisonous secretions.</b> Wash hands after contact; keep pets away.</div>` : ''}
     ${f ? `
-      <div class="gallery">${imgs.length ? imgs.map((i) => `<img src="${esc(i.url)}" alt="${esc(s.common)}" title="${esc(i.credit || '')}">`).join('') : `<div class="sil">${U.silhouette(s.pack, packOf(s.pack).color)}</div>`}</div>
+      <div class="gallery">${imgs.length ? imgs.map((i) => `<img src="${esc(i.url)}" alt="${esc(s.common)}" title="${esc(i.credit || '')}">`).join('') : mono(s, true)}</div>
       ${imgs.some((i) => i.credit) ? `<p class="tiny muted">Photos: ${imgs.map((i) => esc(i.credit || '')).filter(Boolean).join('; ')}</p>` : ''}
       ${kv('Identification', f.id_notes)}${kv('Size', f.size)}${kv('Habitat', f.habitat)}${kv('Distribution', f.distribution)}
       ${kv('Behaviour & notes', f.behaviour)}${kv('Similar species', f.similar)}
       <div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)} (${esc(s.iucn)})</p></div>
       ${regions.length ? `<div class="kv"><h4>Recorded in (checklists)</h4><p class="small">${regions.map(esc).join(' · ')}</p></div>` : ''}`
     : `<div class="kv"><h4>IUCN Red List</h4><p>${esc(IUCN[s.iucn]?.name || s.iucn)}</p></div>${unlockOffer(s.pack)}`}
-    <div class="row" style="margin-top:16px"><button class="btn btn-primary grow" id="sp-rec">📝 Record sighting</button><button class="btn btn-ghost grow" id="sp-rk">🛣️ Log road-kill</button></div>`);
+    <div class="row" style="margin-top:16px"><button class="btn btn-primary grow" id="sp-rec">${I('clipboard-list')} Record sighting</button><button class="btn btn-ghost grow" id="sp-rk">${I('route')} Log road-kill</button></div>`);
   $('sp-rec').onclick = () => { closeSheet(); quickSighting(id); };
   $('sp-rk').onclick = () => { closeSheet(); show('roadkill'); if (RK()) logRoadkill(s.pack, id); else toast('Start a road-kill survey first'); };
 }
@@ -443,7 +460,7 @@ function openStore(region = S.region, preselect = []) {
     openSheet(`<h2>Choose your packs</h2><p class="small muted" style="margin:4px 0 10px">Pay only for the groups you need. A state pack covers that state's checklist; the country pack covers all of it.</p>
       <label class="f">Region</label><select id="st-reg"></select>
       <div style="margin-top:12px">${lines.map(({ p, q, own }) => `<label class="storeitem ${own ? 'owned' : ''}"><input type="checkbox" data-sp="${p.id}" ${picked.has(p.id) && !own ? 'checked' : ''} ${own || !q ? 'disabled' : ''}>
-        <span style="font-size:26px">${p.emoji}</span><span class="grow"><b>${esc(p.name)}</b><br><span class="small muted">${esc(p.blurb)}</span></span>
+        <span class="gdot" style="--pc:${p.color};width:12px;height:12px"></span><span class="grow"><b>${esc(p.name)}</b><br><span class="small muted">${esc(p.blurb)}</span></span>
         <span class="price">${own ? 'Owned' : q ? U.rupees(q.total) : '—'}</span></label>`).join('')}</div>
       <div class="row" style="margin-top:10px"><b class="grow">Total <span class="price">${U.rupees(total)}</span> <span class="small muted">/ 1 year</span></b>
       <button class="btn btn-primary" id="st-pay" ${total ? '' : 'disabled'}>${HW.DEMO ? 'Unlock (demo, free)' : 'Pay with Razorpay'}</button></div>
@@ -464,7 +481,7 @@ function openStore(region = S.region, preselect = []) {
 // ═════════════════════════ IDENTIFY (Merlin-style step-by-step) ═════════════════════════
 const COLORS = ['black', 'brown', 'tan', 'grey', 'olive', 'green', 'yellow', 'orange', 'red', 'blue', 'purple', 'pink', 'white'];
 const PATTERNS = { plain: 'Plain / uniform', banded: 'Bands or rings', spotted: 'Spots', blotched: 'Large blotches', striped: 'Stripes (lengthwise)', zigzag: 'Zig-zag', checkered: 'Checkered', warty: 'Warty skin', star: 'Star-patterned shell' };
-const TIMES = { day: '☀ Day', dusk: '🌆 Dusk / dawn', night: '🌙 Night' };
+const TIMES = { day: ['sun', 'Day'], dusk: ['sunset', 'Dusk / dawn'], night: ['moon', 'Night'] };
 const IDF = { step: 0, pack: null, colors: new Set(), pattern: null, time: null };
 function renderIdentify() {
   const el = $('idf'), st = IDF.step;
@@ -472,7 +489,7 @@ function renderIdentify() {
   const nav = (next = true) => `<div class="row" style="margin-top:16px">${st ? '<button class="btn btn-ghost" id="i-back">Back</button>' : ''}<span class="grow"></span>${next ? '<button class="btn btn-primary" id="i-next">Next</button>' : ''}</div>`;
   if (st === 0) {
     el.innerHTML = `${bar}<h2>What did you see?</h2><p class="small muted">Answer a few questions — we’ll list the most likely species in ${esc(regionName(S.region))}.</p>
-      <div class="grid2" style="margin-top:12px">${S.packs.map((p) => `<button class="opt ${IDF.pack === p.id ? 'on' : ''}" data-ip="${p.id}"><span class="e">${p.emoji}</span>${esc(p.name)}</button>`).join('')}</div>`;
+      <div class="grid2" style="margin-top:12px">${S.packs.map((p) => `<button class="opt ${IDF.pack === p.id ? 'on' : ''}" data-ip="${p.id}"><span class="e" style="--pc:${p.color}"></span>${esc(p.name)}</button>`).join('')}</div>`;
     el.querySelectorAll('[data-ip]').forEach((b) => (b.onclick = () => { IDF.pack = b.dataset.ip; IDF.step = 1; renderIdentify(); }));
     return;
   }
@@ -480,7 +497,7 @@ function renderIdentify() {
   const inPack = S.index.filter((s) => s.pack === IDF.pack && cl.has(s.id));
   const pool = inPack.filter((s) => isUnlocked(s.id)).map((s) => ({ ...s, traits: S.unlocked[s.id].traits || {} }));
   if (!pool.length) {
-    el.innerHTML = `${bar}<h2>${esc(packOf(IDF.pack).emoji + ' ' + packOf(IDF.pack).name)}</h2>
+    el.innerHTML = `${bar}<h2>${esc(packOf(IDF.pack).name)}</h2>
       <p class="muted small">${inPack.length} species on the ${esc(regionName(S.region))} checklist.</p>${unlockOffer(IDF.pack)}${nav(false)}`;
   } else if (st === 1) {
     const avail = new Set(pool.flatMap((s) => s.traits.color || []));
@@ -492,7 +509,7 @@ function renderIdentify() {
     el.innerHTML = `${bar}<h2>Pattern?</h2><div class="grid2" style="margin-top:10px">${Object.entries(PATTERNS).filter(([k]) => avail.has(k)).map(([k, l]) => `<button class="opt ${IDF.pattern === k ? 'on' : ''}" data-pt="${k}">${esc(l)}</button>`).join('')}</div>${nav()}`;
     el.querySelectorAll('[data-pt]').forEach((b) => (b.onclick = () => { IDF.pattern = IDF.pattern === b.dataset.pt ? null : b.dataset.pt; renderIdentify(); }));
   } else if (st === 3) {
-    el.innerHTML = `${bar}<h2>When did you see it?</h2><div class="grid2" style="margin-top:10px">${Object.entries(TIMES).map(([k, l]) => `<button class="opt ${IDF.time === k ? 'on' : ''}" data-t="${k}">${l}</button>`).join('')}</div>${nav()}`;
+    el.innerHTML = `${bar}<h2>When did you see it?</h2><div class="grid2" style="margin-top:10px">${Object.entries(TIMES).map(([k, [ic, l]]) => `<button class="opt ${IDF.time === k ? 'on' : ''}" data-t="${k}">${I(ic)}${l}</button>`).join('')}</div>${nav()}`;
     el.querySelectorAll('[data-t]').forEach((b) => (b.onclick = () => { IDF.time = IDF.time === b.dataset.t ? null : b.dataset.t; renderIdentify(); }));
   } else {
     const scored = pool.map((s) => {
@@ -529,7 +546,7 @@ function renderRecord() {
       <label class="f">Protocol</label><select id="r-proto">${Object.entries(PROTOCOLS).map(([k, l]) => `<option value="${k}" ${k === 'traveling' ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <div class="grid2"><div><label class="f">Observers</label><input id="r-obs" type="number" min="1" value="1"></div>
       <div><label class="f">Region</label><select id="r-reg"></select></div></div>
-      <button class="btn btn-primary btn-block" id="r-start" style="margin-top:14px">▶ Start checklist</button>
+      <button class="btn btn-primary btn-block" id="r-start" style="margin-top:14px">${I('play')} Start checklist</button>
       <p class="tiny muted" style="margin-top:8px">The timer, GPS track and distance are recorded automatically. Works offline — it syncs when you’re back online.</p></div>
       <h3 style="margin:18px 0 8px">My recent checklists</h3><div id="r-hist" class="small muted">Loading…</div>`;
     fillRegionSelect($('r-reg'), S.region); suggestRegion('r-reg');
@@ -555,10 +572,10 @@ function renderRecord() {
       <div class="search" style="margin:0"><input id="r-q" type="search" placeholder="Filter checklist…" value="${esc(recFilter)}"></div></div>
     <div class="card" style="margin-top:10px;overflow:hidden">
       ${extras.map((x) => recRow(x.key, `${esc(x.species_text)} <span class="small muted">(${esc(packOf(x.pack).name)}, unlisted)</span>`, x.count)).join('')}
-      ${list.map((s) => recRow(s.id, `${nameHtml(s)}${s.venom === 'venomous' ? ' <span class="pill venom">⚠</span>' : ''}`, t.items[s.id]?.count || 0)).join('') || '<div class="empty">No species in this checklist.</div>'}
+      ${list.map((s) => recRow(s.id, `${nameHtml(s)}${s.venom === 'venomous' ? ' <span class="pill venom" title="Venomous">' + I('triangle-alert') + '</span>' : ''}`, t.items[s.id]?.count || 0)).join('') || '<div class="empty">No species in this checklist.</div>'}
       <div class="pad"><button class="btn btn-ghost btn-block" id="r-other">+ Add unlisted / unidentified</button></div></div>
     <label class="f">Checklist notes</label><textarea id="r-notes" placeholder="Weather, habitat, observers…">${esc(t.notes || '')}</textarea>
-    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="r-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="r-submit">Submit checklist</button></div>`;
+    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="r-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="r-submit">${I('check')} Submit checklist</button></div>`;
   paintTripStats(); tripTimer = setInterval(paintTripStats, 1000);
   $('r-q').oninput = (e) => { recFilter = e.target.value; const pos = e.target.selectionStart; renderRecord(); const q = $('r-q'); q.focus(); q.setSelectionRange(pos, pos); };
   $('r-notes').onchange = (e) => { const t = TRIP(); t.notes = e.target.value; saveTripState(t); };
@@ -598,7 +615,7 @@ function detailSheet(key, after) {
     <label class="f">Notes (behaviour, microhabitat, ID features)</label><textarea id="d-notes">${esc(it.notes)}</textarea>
     <label class="f">Photos</label><input id="d-ph" type="file" accept="image/*" capture="environment" multiple>
     <div class="row wrap" id="d-thumbs" style="margin-top:6px">${it.photos.map((p) => `<img src="${esc(p)}" style="width:64px;height:64px;object-fit:cover;border-radius:8px">`).join('')}</div>
-    <p class="small muted" style="margin-top:8px">📍 ${it.lat != null ? `${it.lat.toFixed(5)}, ${it.lng.toFixed(5)} (±${Math.round(it.accuracy_m || 0)} m)` : 'no location yet'} <button class="btn btn-ghost btn-sm" id="d-pin">Use current location</button></p>
+    <p class="small muted row wrap" style="margin-top:8px;gap:6px">${I('map-pin')} ${it.lat != null ? `${it.lat.toFixed(5)}, ${it.lng.toFixed(5)} (±${Math.round(it.accuracy_m || 0)} m)` : 'no location yet'} <button class="btn btn-ghost btn-sm" id="d-pin">Use current location</button></p>
     <button class="btn btn-primary btn-block" id="d-save" style="margin-top:12px">Save</button>`);
   $('d-pin').onclick = async () => { const f = await Geo.once(); if (!f) return toast('No GPS fix'); Object.assign(it, { lat: f.lat, lng: f.lng, accuracy_m: f.acc }); toast('Location updated'); };
   $('d-ph').onchange = async (e) => {
@@ -612,7 +629,7 @@ function detailSheet(key, after) {
 }
 function otherSheet() {
   openSheet(`<h3>Unlisted or unidentified</h3>
-    <label class="f">Group</label><select id="o-pack">${S.packs.map((p) => `<option value="${p.id}">${p.emoji} ${esc(p.name)}</option>`).join('')}</select>
+    <label class="f">Group</label><select id="o-pack">${S.packs.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
     <label class="f">Name / description</label><input id="o-name" placeholder="e.g. Unidentified skink, Lycodon sp.">
     <label class="f">Count</label><input id="o-n" type="number" min="1" value="1">
     <button class="btn btn-primary btn-block" id="o-add" style="margin-top:12px">Add</button>`);
@@ -694,7 +711,7 @@ function renderRoadkill() {
       <div><label class="f">Road type</label><select id="k-type"><option>highway</option><option>state road</option><option>district road</option><option>village road</option><option>forest road</option><option>unpaved track</option></select></div></div>
       <label class="f">Road name / number</label><input id="k-road" placeholder="e.g. NH 4 Andaman Trunk Road">
       <label class="f">Region</label><select id="k-reg"></select>
-      <button class="btn btn-red btn-block" id="k-start" style="margin-top:14px">▶ Start survey & track</button>
+      <button class="btn btn-red btn-block" id="k-start" style="margin-top:14px">${I('play')} Start survey &amp; track</button>
       <p class="tiny muted" style="margin-top:8px">Keep the screen on while driving (the app requests a wake-lock). For screen-off background tracking use the installed Android app. Never use the phone while driving — have a passenger log records.</p></div>
       <h3 style="margin:18px 0 8px">My road surveys</h3><div id="k-hist" class="small muted">Loading…</div>`;
     fillRegionSelect($('k-reg'), S.region); suggestRegion('k-reg');
@@ -709,10 +726,10 @@ function renderRoadkill() {
   el.innerHTML = `<div class="card pad"><div class="row"><div class="grow"><div class="eyebrow">Survey in progress · ${esc(r.mode)}</div><b>${esc(r.road_name || 'Unnamed road')}</b> <span class="small muted">${esc(regionName(r.region_code))}</span></div></div>
       <div class="statbar"><div class="stat"><b id="ks-time">0:00</b><span>time</span></div><div class="stat"><b id="ks-km">0.00</b><span>km</span></div><div class="stat"><b id="ks-n">0</b><span>records</span></div><div class="stat"><b id="ks-rate">0</b><span>/100 km</span></div></div>
       <div id="rkmap"></div>
-      <button class="bigbtn" id="k-log">＋ Road-kill here</button></div>
+      <button class="bigbtn row" style="justify-content:center;gap:10px" id="k-log">${I('map-pin')} Log road-kill here</button></div>
     <div class="card" style="margin-top:10px" id="k-list"></div>
     <label class="f">Survey notes</label><textarea id="k-notes" placeholder="Traffic, weather, verge habitat…">${esc(r.notes)}</textarea>
-    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="k-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="k-stop">■ Stop & save</button></div>`;
+    <div class="row" style="margin-top:12px"><button class="btn btn-ghost" id="k-discard">Discard</button><span class="grow"></span><button class="btn btn-primary" id="k-stop">${I('square')} Stop &amp; save</button></div>`;
   ({ m: rkMap, line: rkLine, layer: rkLayer } = drawMap('rkmap', r.track, [], false));
   if (rkMap) rkMe = L.circleMarker(Geo.last ? [Geo.last.lat, Geo.last.lng] : (HW.CENTROIDS[r.region_code] || [20, 79]), { radius: 8, color: '#fff', weight: 3, fillColor: '#2b6cb0', fillOpacity: 1 }).addTo(rkMap);
   rkMap?.on('dragstart', () => (rkMap.hwUserPanned = true));
@@ -739,8 +756,8 @@ function paintRkList() {
   const r = RK(); if (!r) return;
   rkLayer?.clearLayers();
   if (rkLayer) r.records.forEach((x) => L.circleMarker([x.lat, x.lng], { radius: 7, color: '#fff', weight: 2, fillColor: packOf(x.pack).color, fillOpacity: 1 }).bindPopup(esc(byId(x.species_id)?.common || x.species_text || packOf(x.pack).name)).addTo(rkLayer));
-  $('k-list').innerHTML = r.records.length ? r.records.slice().reverse().map((x) => `<div class="rec-row"><span style="font-size:22px">${packOf(x.pack).emoji}</span><div class="grow"><b>${esc(byId(x.species_id)?.common || x.species_text || 'Unidentified ' + packOf(x.pack).name.toLowerCase())}</b> ×${x.count}
-      <div class="tiny muted">${new Date(x.observed_at).toLocaleTimeString()} · ${esc(x.condition)} · ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}</div></div><button class="btn btn-ghost btn-sm" data-delrk="${x.id}">✕</button></div>`).join('')
+  $('k-list').innerHTML = r.records.length ? r.records.slice().reverse().map((x) => `<div class="rec-row">${dot(x.pack)}<div class="grow"><b>${esc(byId(x.species_id)?.common || x.species_text || 'Unidentified ' + packOf(x.pack).name.toLowerCase())}</b> ×${x.count}
+      <div class="tiny muted">${new Date(x.observed_at).toLocaleTimeString()} · ${esc(x.condition)} · ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}</div></div><button class="btn btn-ghost btn-sm" data-delrk="${x.id}" aria-label="Delete record">${I('trash-2')}</button></div>`).join('')
     : '<div class="empty small">No records yet. Tap “Road-kill here” at each carcass.</div>';
   $('k-list').querySelectorAll('[data-delrk]').forEach((b) => (b.onclick = () => { const r = RK(); r.records = r.records.filter((x) => x.id !== b.dataset.delrk); saveRk(r); paintRkList(); paintRkStats(); }));
 }
@@ -752,8 +769,8 @@ async function logRoadkill(presetPack, presetSpecies) {
   const r = RK(), cl = new Set(U.lsGet('hw_cl_' + r.region_code, null) || S.checklist);
   const draw = () => {
     const sp = S.index.filter((s) => s.pack === pack && cl.has(s.id)).sort((a, b) => a.common.localeCompare(b.common));
-    openSheet(`<h3>Road-kill record</h3><p class="tiny muted">📍 ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} ${pos.acc ? '(±' + Math.round(pos.acc) + ' m)' : '(map centre — no GPS)'}</p>
-      <label class="f">Group *</label><div class="chips">${S.packs.map((p) => `<button class="chip ${p.id === pack ? 'on' : ''}" data-kp="${p.id}">${p.emoji} ${esc(p.name)}</button>`).join('')}</div>
+    openSheet(`<h3>Road-kill record</h3><p class="tiny muted row" style="gap:6px">${I('map-pin')} ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} ${pos.acc ? '(±' + Math.round(pos.acc) + ' m)' : '(map centre — no GPS)'}</p>
+      <label class="f">Group *</label><div class="chips">${S.packs.map((p) => `<button class="chip ${p.id === pack ? 'on' : ''}" data-kp="${p.id}">${dot(p.id)}${esc(p.name)}</button>`).join('')}</div>
       <label class="f">Species</label><select id="kr-sp"><option value="">Unidentified ${esc(packOf(pack).name.toLowerCase())}</option>${sp.map((s) => `<option value="${s.id}" ${s.id === presetSpecies ? 'selected' : ''}>${esc(s.common)} (${esc(s.sci)})</option>`).join('')}<option value="__other">Other (type name)…</option></select>
       <input id="kr-txt" class="hidden" placeholder="Species name" style="margin-top:6px">
       <div class="grid2"><div><label class="f">Count</label><input id="kr-n" type="number" min="1" value="1"></div>
@@ -784,11 +801,15 @@ async function renderMe() {
   if (!me) return show('auth');
   const ents = S.ents;
   el.innerHTML = `<div class="card pad"><div class="row"><div style="width:48px;height:48px;border-radius:50%;background:var(--forest-2);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px">${esc((me.full_name || me.username || '?')[0].toUpperCase())}</div>
-      <div class="grow"><b>${esc(me.full_name || me.username)}</b><div class="small muted">@${esc(me.username)} · ${esc(me.email || '')}</div></div>${me.role === 'admin' ? '<a class="btn btn-ghost btn-sm" href="admin.html">Admin</a>' : ''}</div></div>
+      <div class="grow"><b>${esc(me.full_name || me.username)}</b><div class="small muted">@${esc(me.username)} · ${esc(me.email || '')}</div></div>${me.role === 'admin' || me.role === 'reviewer' ? `<a class="btn btn-ghost btn-sm" href="dashboard/">${I('layout-dashboard')} Dashboard</a>` : ''}</div></div>
     <div class="card pad" style="margin-top:10px"><div class="row"><h3 class="grow">My packs</h3><button class="btn btn-primary btn-sm" id="m-store">Buy packs</button></div>
-      ${ents.length ? ents.map((e) => `<div class="rec-row"><span style="font-size:22px">${packOf(e.pack).emoji}</span><div class="grow"><b>${esc(packOf(e.pack).name)}</b> · ${esc(regionName(e.region))}<div class="tiny muted">${e.valid_until ? 'valid until ' + new Date(e.valid_until).toLocaleDateString() : 'lifetime'} · ${esc(e.source)}</div></div></div>`).join('')
+      ${ents.length ? ents.map((e) => `<div class="rec-row">${dot(e.pack)}<div class="grow"><b>${esc(packOf(e.pack).name)}</b> · ${esc(regionName(e.region))}<div class="tiny muted">${e.valid_until ? 'valid until ' + new Date(e.valid_until).toLocaleDateString() : 'lifetime'} · ${esc(e.source)}</div></div></div>`).join('')
         : '<p class="small muted" style="margin-top:6px">No packs yet. The species list, safety info and recording are free; packs unlock photos, ID notes and the Identify wizard.</p>'}
       <p class="tiny muted" style="margin-top:6px">${Object.keys(S.unlocked).length} species downloaded for offline use.</p></div>
+    <div class="card pad row" data-install style="margin-top:10px;gap:14px;cursor:pointer">
+      <img src="assets/icon-192.png" alt="" width="44" height="44" style="border-radius:11px">
+      <div class="grow"><b>Install ${esc(HW.C.APP_NAME)}</b><div class="small muted">Add it to your home screen. Opens full-screen and works offline in the field.</div></div>
+      <span class="btn btn-primary btn-sm">${I('download')} Install</span></div>
     <div class="card pad" style="margin-top:10px"><h3>Data</h3>
       <p class="small muted" id="m-sync"></p>
       <div class="row wrap" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="m-syncnow">Sync now</button><button class="btn btn-ghost btn-sm" id="m-csv">Export my sightings (CSV)</button><button class="btn btn-ghost btn-sm" id="m-geo">Export road-kill (GeoJSON)</button></div></div>
@@ -797,6 +818,7 @@ async function renderMe() {
       <div class="row wrap" style="margin-top:12px"><a class="btn btn-ghost btn-sm" href="index.html">Website & reports</a><button class="btn btn-ghost btn-sm" id="m-out">Sign out</button>${HW.DEMO ? '<button class="btn btn-ghost btn-sm" id="m-reset">Reset demo data</button>' : ''}</div></div>`;
   $('m-sync').textContent = `${outbox().length} item(s) waiting to sync · ${navigator.onLine ? 'online' : 'offline'}`;
   $('m-store').onclick = () => openStore();
+  window.HWInstall?.update();
   $('m-syncnow').onclick = async () => { await syncNow(); renderMe(); };
   $('m-theme').value = U.lsGet('hw_theme', '');
   $('m-theme').onchange = (e) => { U.lsSet('hw_theme', e.target.value); applyTheme(); };
@@ -838,14 +860,17 @@ function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.document
 (async function boot() {
   applyTheme();
   $('brand').textContent = HW.C.APP_NAME; document.title = HW.C.APP_NAME + ' Field App'; $('tagline').textContent = HW.C.TAGLINE;
-  $('auth-app').textContent = $('auth-name').textContent = HW.C.APP_NAME; $('tabs').dataset.brand = HW.C.APP_NAME;
-  if (HW.DEMO) $('demo').classList.remove('hidden');
+  $('auth-app').textContent = $('auth-name').textContent = HW.C.APP_NAME;
+  document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = I(el.dataset.ic)));
+  document.querySelectorAll('.iconbtn[data-install]').forEach((el) => (el.innerHTML = I('download')));
+  if (HW.DEMO) { $('demo').classList.remove('hidden'); document.body.style.setProperty('--topoff', $('demo').offsetHeight + 'px'); }
   await loadCatalog();
   fillRegionSelect($('region'), S.region); fillRegionSelect($('up-region'), S.region);
   try { S.me = await api.session(); } catch { S.me = null; }
   if (!S.me) { paintSync(); return show('auth'); }
   await afterLogin();
-  if (TRIP()) show('record'); else if (RK()) show('roadkill');
+  const h = location.hash.slice(1);
+  if (TRIP()) show('record'); else if (RK()) show('roadkill'); else if (['guide', 'identify', 'record', 'roadkill', 'me'].includes(h)) show(h);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
 </script>

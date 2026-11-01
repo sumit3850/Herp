@@ -10,7 +10,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState, MapView, PageHeader, RegionSelect, ReviewBadge, SearchInput, SpeciesName } from "@/components/common";
+import { EmptyState, MapView, OffListFlag, PageHeader, RegionSelect, ReviewBadge, SearchInput, SpeciesName } from "@/components/common";
 import { useAction, useData } from "@/lib/store";
 import { fmtDate, fmtDateTime, num, PROTOCOLS } from "@/lib/format";
 import type { ReviewStatus, Sighting, Trip } from "@/lib/hw";
@@ -92,7 +92,7 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
           <RegionSelect value={f.region} onChange={(region) => setF({ ...f, region })} allowAll />
           <NativeSelect value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Filters["status"] })} aria-label="Review status">
             <option value="">Any status</option><option value="pending">Pending review</option><option value="accepted">Accepted</option>
-            <option value="rejected">Rejected</option><option value="flagged">⚑ Not on core checklist</option>
+            <option value="rejected">Rejected</option><option value="flagged">Not on core checklist (flagged)</option>
           </NativeSelect>
           <div className="flex items-center gap-2 lg:col-span-2">
             <Label htmlFor="f-from" className="sr-only">From</Label>
@@ -129,7 +129,7 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
                         <TableCell><span className="font-medium">{t.full_name || t.username}</span><span className="block text-xs text-muted-foreground">@{t.username}</span></TableCell>
                         <TableCell className="whitespace-nowrap">{regionName(t.region_code)}</TableCell>
                         <TableCell><span className="whitespace-nowrap">{PROTOCOLS[t.protocol] || t.protocol}</span>{t.complete && <span className="block text-xs text-primary">complete list</span>}</TableCell>
-                        <TableCell className="text-right tabular-nums">{t.sightings.length}{flagged > 0 && <span title={`${flagged} not on core checklist`} className="ml-1 text-warning">⚑{flagged}</span>}</TableCell>
+                        <TableCell className="text-right tabular-nums">{t.sightings.length}{flagged > 0 && <OffListFlag n={flagged} title={`${flagged} not on core checklist`} />}</TableCell>
                         <TableCell className="text-right tabular-nums">{num(t.sightings.reduce((a, s) => a + s.count, 0))}</TableCell>
                         <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground xl:table-cell">{t.duration_min ?? 0} min · {t.distance_km ?? 0} km · {t.observers ?? 1} obs.</TableCell>
                         <TableCell><ReviewBadge status={tripStatus(t)} /></TableCell>
@@ -162,7 +162,7 @@ export function SubmissionsPage({ initial }: { initial?: Partial<Filters> }) {
                       <TableCell className="whitespace-nowrap">{fmtDate(s.observed_at)}</TableCell>
                       <TableCell>
                         <SpeciesName id={s.species_id} text={s.species_text} />
-                        {offList(s) && <span className="mt-0.5 flex items-center gap-1 text-xs text-warning"><AlertTriangle className="size-3" /> Not on {regionName(s.region_code)} checklist</span>}
+                        {offList(s) && <span className="mt-0.5 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="size-3" /> Not on {regionName(s.region_code)} checklist</span>}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{s.count}</TableCell>
                       <TableCell className="whitespace-nowrap">{regionName(s.region_code)}</TableCell>
@@ -224,7 +224,7 @@ function TripDetail({ trip, offList, onReview, onReviewOne, onDelete }: { trip: 
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2"><SpeciesName id={s.species_id} text={s.species_text} compact /><span className="font-mono text-sm">×{s.count}</span></div>
               <p className="text-xs text-muted-foreground">{[s.life_stage, s.sex, s.notes].filter(Boolean).join(" · ") || (s.species_id ? spById[s.species_id]?.sci : "")}</p>
-              {offList(s) && <p className="mt-1 flex items-center gap-1 text-xs text-warning"><AlertTriangle className="size-3" /> Not on the core checklist for {regionName(s.region_code)}. Verify, or add it to the checklist.</p>}
+              {offList(s) && <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="size-3" /> Not on the core checklist for {regionName(s.region_code)}. Verify, or add it to the checklist.</p>}
               {(s.photos?.length ?? 0) > 0 && <div className="mt-2 flex gap-2">{s.photos!.map((p) => <a key={p} href={p} target="_blank" rel="noreferrer"><img src={p} alt="" className="size-14 rounded-md object-cover" /></a>)}</div>}
             </div>
             <ReviewBadge status={s.review_status} />

@@ -90,7 +90,7 @@ export function DataProvider({ hw, me, children }: { hw: HWGlobal; me: Profile; 
     const regMap = Object.fromEntries(s.regions.map((r) => [r.code, r.name]));
     return {
       hw, me, isAdmin, ...s, reload, spById,
-      packOf: (id) => packMap[id || ""] || { id: id || "", name: id || "Unknown", emoji: "•", color: "#888", blurb: "" },
+      packOf: (id) => packMap[id || ""] || { id: id || "", name: id || "Unknown", emoji: "", color: "#888", blurb: "" },
       regionName: (code) => (code ? regMap[code] || code : "—"),
     };
   }, [hw, me, isAdmin, s, reload]);

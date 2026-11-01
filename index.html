@@ -8,26 +8,39 @@
 <meta name="theme-color" content="#1f5b3c">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Calistoga&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="style.css">
 <style>
 .wrapw{max-width:1120px;margin:0 auto;padding:0 20px}
 nav.site{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--paper) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 nav.site .wrapw{display:flex;align-items:center;gap:18px;height:60px}
-nav.site .logo{font-family:var(--display);font-size:22px;color:var(--forest-2);text-decoration:none}
+nav.site .logo{display:flex;align-items:center;gap:9px;font-weight:650;font-size:18px;letter-spacing:-.02em;color:var(--ink);text-decoration:none}nav.site .logo img{width:30px;height:30px;border-radius:8px}
 nav.site a.l{color:var(--ink-soft);text-decoration:none;font-size:14px;font-weight:550}
-.hero{padding:64px 0 40px;background:radial-gradient(1200px 400px at 80% -10%,var(--forest-soft),transparent)}
-.hero h1{font-family:var(--display);font-weight:400;font-size:clamp(34px,5.5vw,58px);line-height:1.05;letter-spacing:-.02em;max-width:820px}
+.hero{padding:56px 0 40px}.hero .wrapw{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center}
+.hero-panel{position:relative;min-height:420px;border-radius:24px;background:url(assets/hero-herp.svg) center/cover;overflow:hidden;box-shadow:var(--shadow)}
+.hero-panel .kpi-g{position:absolute;left:20px;right:20px;bottom:20px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.hero-panel .kg{background:rgba(255,255,255,.14);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.2);border-radius:16px;padding:12px 14px;color:#fff}
+.hero-panel .kg b{display:block;font-family:var(--mono);font-size:22px;font-weight:500}.hero-panel .kg span{font-size:12px;opacity:.85}
+.hero-panel .tag{position:absolute;top:18px;left:20px;display:inline-flex;align-items:center;gap:8px;color:#fff;font-size:12.5px;font-weight:600;background:rgba(0,0,0,.22);padding:6px 12px;border-radius:999px}
+.hero-panel .tag i{width:7px;height:7px;border-radius:50%;background:#7cc79a;box-shadow:0 0 0 4px rgba(124,199,154,.25)}
+@media (max-width:860px){.hero .wrapw{grid-template-columns:1fr}.hero-panel{min-height:300px}}
+@media (max-width:520px){.hero-panel .kpi-g{grid-template-columns:1fr 1fr}.hero-panel .kg:last-child{display:none}}
+.hero h1{font-family:var(--display);font-weight:650;font-size:clamp(34px,5vw,54px);line-height:1.05;letter-spacing:-.035em;max-width:820px}
 .hero p.lead{font-size:18px;color:var(--ink-soft);max-width:660px;margin:16px 0 24px}
 section.blk{padding:46px 0}
-section.blk h2{font-family:var(--display);font-weight:400;font-size:32px;margin-bottom:6px}
+section.blk h2{font-family:var(--display);font-weight:650;letter-spacing:-.03em;font-size:32px;margin-bottom:6px}
 .feat{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:20px}
-.feat .card{padding:18px}.feat .ic{font-size:28px}.feat h3{margin:8px 0 4px;font-size:17px}.feat p{font-size:14px;color:var(--ink-soft)}
+.feat .card{padding:20px}.feat .fi{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--forest-soft);color:var(--forest-2)}.feat .fi .ic{width:20px;height:20px}.feat h3{margin:8px 0 4px;font-size:17px}.feat p{font-size:14px;color:var(--ink-soft)}
 .packs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:20px}
 .packs .card{padding:18px;border-top:4px solid var(--pc)}
-.packs .e{font-size:34px}.packs .pr{font-family:var(--mono);font-weight:600;margin-top:8px}
+.packs .card h3{display:flex;align-items:center;gap:9px}.packs .gdot{width:11px;height:11px}
+.getapp{display:flex;flex-wrap:wrap;align-items:center;gap:20px;padding:26px;border-radius:20px;background:var(--forest);color:#fff}
+.getapp img{width:64px;height:64px;border-radius:16px;box-shadow:0 0 0 1px rgba(255,255,255,.2)}
+.getapp h3{font-size:22px;font-weight:650;letter-spacing:-.02em}.getapp p{opacity:.85;font-size:14.5px}
+.getapp .btn-ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.35)}.getapp .btn-primary{background:#fff;color:#1f5b3c}.packs .pr{font-family:var(--mono);font-weight:600;margin-top:8px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0}
 .kpi{padding:16px}.kpi b{display:block;font-family:var(--mono);font-size:28px;font-weight:500;letter-spacing:-.02em}.kpi span{font-size:12.5px;color:var(--ink-soft)}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:14px}
@@ -46,30 +59,37 @@ footer{border-top:1px solid var(--line);padding:26px 0;color:var(--ink-soft);fon
   @page{size:A4;margin:12mm}
 }
 @media (max-width:640px){nav.site a.l.hide-sm{display:none}}
+@media (max-width:420px){.hide-xs{display:none}}
 </style>
 </head>
 <body>
 <div id="demo" class="demo-banner hidden">Demo mode — the report below uses generated sample records.</div>
-<nav class="site"><div class="wrapw"><a class="logo" href="#" id="logo">HerpWatch</a><span class="grow"></span>
-  <a class="l hide-sm" href="#features">Features</a><a class="l hide-sm" href="#packs">Packs</a><a class="l" href="#report">Live report</a>
+<nav class="site"><div class="wrapw"><a class="logo" href="#"><img src="assets/icon.svg" alt=""><span id="logo">HerpWatch</span></a><span class="grow"></span>
+  <a class="l hide-sm" href="#features">Features</a><a class="l hide-sm" href="#packs">Packs</a><a class="l hide-sm" href="#report">Live report</a><a class="l hide-sm" href="dashboard/">Dashboard</a>
+  <button class="btn btn-ghost btn-sm" data-install><span data-ic="download"></span><span class="hide-xs">Install app</span></button>
   <a class="btn btn-primary btn-sm" href="app.html">Open app</a></div></nav>
 
 <header class="hero"><div class="wrapw">
-  <div class="eyebrow">Citizen science for reptiles & amphibians</div>
+  <div><div class="eyebrow">Citizen science for reptiles & amphibians</div>
   <h1>Find, identify and record every snake, lizard, frog and turtle you meet.</h1>
   <p class="lead" id="lead">A field guide that works offline, an identification helper, an eBird-style checklist recorder and a GPS road-kill logger, built for India’s states and union territories.</p>
-  <div class="row wrap"><a class="btn btn-primary" href="app.html">Start recording, it's free</a><a class="btn btn-ghost" href="#report">See the data</a></div>
+  <div class="row wrap"><a class="btn btn-primary" href="app.html">Start recording, it's free <span data-ic="arrow-right"></span></a><button class="btn btn-ghost" data-install><span data-ic="download"></span> Install the app</button></div>
+  <p class="small muted" style="margin-top:14px">Works on Android, iPhone and desktop. Installs from the browser, no app store needed.</p>
+  </div>
+  <div class="hero-panel" role="img" aria-label="Live totals from HerpWatch observers"><span class="tag"><i></i>Live data</span>
+    <div class="kpi-g"><div class="kg"><b id="hk-ind">–</b><span>individuals recorded</span></div><div class="kg"><b id="hk-sp">–</b><span>species</span></div><div class="kg"><b id="hk-km">–</b><span>km of road surveyed</span></div></div>
+  </div>
 </div></header>
 
 <section class="blk" id="features"><div class="wrapw">
   <div class="eyebrow">What’s inside</div><h2>One app, four field tools</h2>
   <div class="feat">
-    <div class="card"><div class="ic">📖</div><h3>Field guide</h3><p>Every species has a photo, its common and scientific name, ID notes, habitat, distribution, IUCN Red List status, and whether it is venomous or poisonous. Lists are filtered to your state’s checklist.</p></div>
-    <div class="card"><div class="ic">🔍</div><h3>Identify</h3><p>Answer a few quick questions (group, colours, pattern, time of day) and get the most likely species where you are. Works offline once a pack is downloaded.</p></div>
-    <div class="card"><div class="ic">📝</div><h3>Checklists</h3><p>Record sightings eBird-style. Choose a protocol and the app times the checklist, tracks GPS distance, and takes counts, life stage, photos and notes for each species. Data syncs when you’re back online.</p></div>
-    <div class="card"><div class="ic">🛣️</div><h3>Road-kill logger</h3><p>Drive or walk a road while the app records the track. Drop a point at every carcass. Survey effort is kept, so results come out as kills per 100 km.</p></div>
-    <div class="card"><div class="ic">⚠️</div><h3>Safety first, always free</h3><p>Venomous and poisonous flags and snakebite first-aid are never behind a paywall.</p></div>
-    <div class="card"><div class="ic">🔒</div><h3>Sensitive species protected</h3><p>Public maps blur locations to about 1 km, or about 10 km for traded and threatened species. Exact points are seen only by the observer and the reviewers.</p></div>
+    <div class="card"><div class="fi" data-ic="book-open"></div><h3>Field guide</h3><p>Every species has a photo, its common and scientific name, ID notes, habitat, distribution, IUCN Red List status, and whether it is venomous or poisonous. Lists are filtered to your state’s checklist.</p></div>
+    <div class="card"><div class="fi" data-ic="scan-search"></div><h3>Identify</h3><p>Answer a few quick questions (group, colours, pattern, time of day) and get the most likely species where you are. Works offline once a pack is downloaded.</p></div>
+    <div class="card"><div class="fi" data-ic="clipboard-list"></div><h3>Checklists</h3><p>Record sightings eBird-style. Choose a protocol and the app times the checklist, tracks GPS distance, and takes counts, life stage, photos and notes for each species. Data syncs when you’re back online.</p></div>
+    <div class="card"><div class="fi" data-ic="route"></div><h3>Road-kill logger</h3><p>Drive or walk a road while the app records the track. Drop a point at every carcass. Survey effort is kept, so results come out as kills per 100 km.</p></div>
+    <div class="card"><div class="fi" data-ic="shield-check"></div><h3>Safety first, always free</h3><p>Venomous and poisonous flags and snakebite first-aid are never behind a paywall.</p></div>
+    <div class="card"><div class="fi" data-ic="lock"></div><h3>Sensitive species protected</h3><p>Public maps blur locations to about 1 km, or about 10 km for traded and threatened species. Exact points are seen only by the observer and the reviewers.</p></div>
   </div>
 </div></section>
 
@@ -82,7 +102,7 @@ footer{border-top:1px solid var(--line);padding:26px 0;color:var(--ink-soft);fon
 <section class="blk" id="report"><div class="wrapw">
   <div class="printonly"><h1 class="display" id="ptitle">HerpWatch report</h1><p id="pdate" class="small"></p></div>
   <div class="row wrap"><div class="grow"><div class="eyebrow">Live data report</div><h2>What observers are finding</h2></div>
-    <button class="btn btn-ghost btn-sm noprint" id="print">🖨 Print / save PDF report</button></div>
+    <button class="btn btn-ghost btn-sm noprint" id="print"><span data-ic="printer"></span> Print / save PDF report</button></div>
   <p class="small muted">Includes all checklists and road-kill surveys except rejected records. Updated in real time.</p>
   <div class="kpis" id="kpis"></div>
   <div class="charts">
@@ -98,11 +118,20 @@ footer{border-top:1px solid var(--line);padding:26px 0;color:var(--ink-soft);fon
     <div id="pmap"></div><div class="legend" id="mlegend"></div></div>
 </div></section>
 
+<section class="blk noprint" style="padding-top:10px"><div class="wrapw">
+  <div class="getapp"><img src="assets/icon-192.png" alt="">
+    <div class="grow"><h3>Take HerpWatch into the field</h3><p>Install it on your phone. The checklist recorder and road-kill logger keep working with no signal and sync when you’re back online.</p></div>
+    <div class="row wrap"><button class="btn btn-primary" data-install><span data-ic="download"></span> Install app</button><a class="btn btn-ghost" href="app.html">Open in browser</a></div>
+  </div>
+</div></section>
+
 <footer><div class="wrapw row wrap"><span class="grow" id="foot"></span><a href="app.html">Field app</a> · <a href="dashboard/">Admin dashboard</a></div></footer>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script src="assets/icons.js"></script>
+<script src="install.js"></script>
 <script src="config.js"></script>
 <script src="data/seed.js"></script>
 <script src="common.js"></script>
@@ -135,6 +164,7 @@ const bar = (el, labels, data, colors, horizontal = true) => new Chart($(el), {
 
 async function report() {
   const st = await api.publicStats(), t = st.totals;
+  $('hk-ind').textContent = Number(t.sightings || 0).toLocaleString('en-IN'); $('hk-sp').textContent = t.species || 0; $('hk-km').textContent = Math.round(t.roadkill_km || 0).toLocaleString('en-IN');
   $('kpis').innerHTML = [[t.sightings, 'individuals recorded'], [t.species, 'species recorded'], [t.observers, 'contributors'], [t.roadkill, 'road-kills logged'], [t.roadkill_km, 'km of road surveyed'], [t.roadkill_per_100km, 'road-kills per 100 km']]
     .map(([n, l]) => `<div class="card kpi"><b>${Number(n ?? 0).toLocaleString('en-IN')}</b><span>${l}</span></div>`).join('');
 
@@ -198,11 +228,13 @@ async function map() {
   $('pdate').textContent = 'Generated ' + new Date().toLocaleString('en-IN');
   $('foot').textContent = `© ${new Date().getFullYear()} ${C.APP_NAME} · Contact ${C.SUPPORT_EMAIL}`;
   if (HW.DEMO) $('demo').classList.remove('hidden');
+  document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = HWI(el.dataset.ic)));
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   [packs, regions] = await Promise.all([api.packs(), api.regions()]);
   const prices = await api.prices();
   $('packgrid').innerHTML = packs.map((p) => {
     const c = prices.find((x) => x.pack === p.id && x.region === 'IN'), s = prices.find((x) => x.pack === p.id && x.region === '*state');
-    return `<div class="card" style="--pc:${p.color}"><div class="e">${p.emoji}</div><h3>${esc(p.name)}</h3><p class="small muted">${esc(p.blurb)}</p>
+    return `<div class="card" style="--pc:${p.color}"><h3><span class="gdot" style="--pc:${p.color}"></span>${esc(p.name)}</h3><p class="small muted">${esc(p.blurb)}</p>
       <div class="pr">${s ? U.rupees(s.paise) + ' / state' : ''}${s && c ? ' · ' : ''}${c ? U.rupees(c.paise) + ' / all India' : ''}</div><div class="tiny muted">per year</div></div>`;
   }).join('');
   $('print').onclick = () => window.print();

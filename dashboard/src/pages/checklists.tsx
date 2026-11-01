@@ -10,7 +10,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { EmptyState, IucnBadge, PageHeader, RegionSelect, SearchInput, VenomBadge } from "@/components/common";
+import { EmptyState, IucnBadge, PackDot, PackLabel, PageHeader, RegionSelect, SearchInput, VenomBadge } from "@/components/common";
 import { useAction, useData } from "@/lib/store";
 import { CHECKLIST_STATUSES, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -107,7 +107,7 @@ export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; 
               <div className="flex flex-wrap gap-1.5">
                 {packs.map((p) => {
                   const n = (entries || []).filter((e) => spById[e.species_id]?.pack === p.id).length;
-                  return <button key={p.id} onClick={() => setPack(pack === p.id ? "" : p.id)} className={cn("rounded-full border px-2.5 py-1 text-xs font-medium transition-colors", pack === p.id ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}>{p.emoji} {p.name} <span className="font-mono">{n}</span></button>;
+                  return <button key={p.id} onClick={() => setPack(pack === p.id ? "" : p.id)} className={cn("rounded-full border px-2.5 py-1 text-xs font-medium transition-colors", pack === p.id ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent")}><span className="inline-flex items-center gap-1.5"><PackDot color={pack === p.id ? "currentColor" : p.color} />{p.name} <span className="font-mono">{n}</span></span></button>;
                 })}
               </div>
             </CardContent>
@@ -147,7 +147,7 @@ export function ChecklistsPage({ initialRegion, go }: { initialRegion?: string; 
                   {rows.map(({ e, s }) => (
                     <TableRow key={s.id}>
                       <TableCell><span className="font-medium">{s.common}</span><span className="block text-xs italic text-muted-foreground">{s.sci} · {s.family}</span></TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">{packs.find((p) => p.id === s.pack)?.emoji} {packs.find((p) => p.id === s.pack)?.name}</TableCell>
+                      <TableCell className="text-sm"><PackLabel id={s.pack} /></TableCell>
                       <TableCell><IucnBadge code={s.iucn} /></TableCell>
                       <TableCell className="hidden md:table-cell"><VenomBadge s={s} /></TableCell>
                       <TableCell>

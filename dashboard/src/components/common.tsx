@@ -1,7 +1,7 @@
 import * as React from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Search, type LucideIcon } from "lucide-react";
+import { Flag, Search, Skull, TriangleAlert, type LucideIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,11 +53,27 @@ export function IucnBadge({ code }: { code: string }) {
 export function VenomBadge({ s }: { s: Pick<Species, "venom" | "toxic" | "pack"> }) {
   return (
     <span className="inline-flex flex-wrap gap-1">
-      {s.venom === "venomous" && <Badge variant="destructive" className="px-2 py-0 text-[11px]">⚠ Venomous</Badge>}
+      {s.venom === "venomous" && <Badge variant="destructive" className="gap-1 px-2 py-0 text-[11px]"><TriangleAlert className="size-3" /> Venomous</Badge>}
       {s.venom === "mild" && <Badge variant="warning" className="px-2 py-0 text-[11px]">Mildly venomous</Badge>}
-      {s.toxic === "poisonous" && <Badge variant="outline" className="border-purple-400/50 px-2 py-0 text-[11px] text-purple-700 dark:text-purple-300">☠ Poisonous</Badge>}
+      {s.toxic === "poisonous" && <Badge variant="outline" className="border-purple-400/50 px-2 py-0 text-[11px] text-purple-700 dark:text-purple-300"><Skull className="mr-1 size-3" /> Poisonous</Badge>}
     </span>
   );
+}
+
+/** Identity colour of a species group (replaces emoji). */
+export function PackDot({ color, className }: { color?: string; className?: string }) {
+  return <span aria-hidden className={cn("inline-block size-2 shrink-0 rounded-full", className)} style={{ background: color || "#888" }} />;
+}
+
+/** Group name with its colour dot. */
+export function PackLabel({ id }: { id?: string }) {
+  const { packOf } = useData();
+  const p = packOf(id);
+  return <span className="inline-flex items-center gap-2 whitespace-nowrap"><PackDot color={p.color} />{p.name}</span>;
+}
+
+export function OffListFlag({ n, title }: { n?: number; title?: string }) {
+  return <span title={title} className="ml-1 inline-flex items-center gap-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"><Flag className="size-3" />{n ?? ""}</span>;
 }
 
 export function ReviewBadge({ status }: { status: ReviewStatus | "mixed" }) {

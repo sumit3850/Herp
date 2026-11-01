@@ -79,7 +79,7 @@ export function SignUpPage({ title, description, heroImageSrc, testimonials = []
               </button>
             </form>
             <p className="animate-element animate-delay-800 text-center text-sm text-muted-foreground">
-              Already have an account? <a href="#" onClick={(e) => { e.preventDefault(); onSignIn(); }} className="text-violet-400 hover:underline">Sign in</a>
+              Already have an account? <a href="#" onClick={(e) => { e.preventDefault(); onSignIn(); }} className="text-primary hover:underline">Sign in</a>
             </p>
           </div>
         </div>

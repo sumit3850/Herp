@@ -35,8 +35,9 @@ export interface App1SidebarProps {
 export function BrandMark({ className = "size-9" }: { className?: string }) {
   return (
     <svg viewBox="0 0 512 512" className={className} aria-hidden>
-      <rect width="512" height="512" rx="112" fill="var(--primary)" />
-      <path d="M96 330c40-90 110 10 160-60s100-110 150-50l22-10-6 26-24-4c-40-40-80 10-120 70s-120 80-182 28z" fill="var(--primary-foreground)" />
+      <rect width="512" height="512" rx="116" fill="var(--primary)" />
+      <path d="M156 362c0-62 46-92 100-106s100-44 100-106" fill="none" stroke="var(--primary-foreground)" strokeWidth="46" strokeLinecap="round" />
+      <circle cx="356" cy="150" r="10" fill="var(--primary)" />
     </svg>
   );
 }

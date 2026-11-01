@@ -6,6 +6,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 (cd dashboard && npm ci --no-audit --no-fund && npm run build)
 rm -rf _site && mkdir -p _site
-cp -r index.html app.html admin.html admin-classic.html style.css common.js config.js sw.js manifest.json assets data _site/
+cp -r index.html app.html admin.html admin-classic.html style.css common.js config.js install.js sw.js manifest.json assets data _site/
 cp -r dashboard/dist _site/dashboard
 echo "Site assembled in _site/ ($(du -sh _site | cut -f1))"

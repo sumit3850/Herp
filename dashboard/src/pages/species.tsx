@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { EmptyState, IucnBadge, PageHeader, SearchInput, VenomBadge } from "@/components/common";
+import { EmptyState, IucnBadge, PackLabel, PageHeader, SearchInput, VenomBadge } from "@/components/common";
 import { useAction, useData } from "@/lib/store";
 import type { Species } from "@/lib/hw";
 
@@ -42,7 +42,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
         <CardHeader className="flex flex-row flex-wrap items-center gap-3 p-4">
           <SearchInput value={q} onChange={setQ} placeholder="Common, scientific or family name…" className="min-w-0 flex-1" />
           <NativeSelect value={pack} onChange={(e) => setPack(e.target.value)} className="w-52" aria-label="Group">
-            <option value="">All groups</option>{packs.map((p) => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+            <option value="">All groups</option>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </NativeSelect>
         </CardHeader>
         {!list.length ? <EmptyState icon={BookOpen} title="No species found" /> : (
@@ -52,7 +52,7 @@ export function SpeciesPage({ startNew }: { startNew?: boolean }) {
               {list.map((s) => (
                 <TableRow key={s.id}>
                   <TableCell><span className="font-medium">{s.common}</span>{s.endemic && <span className="ml-2 text-xs text-primary">endemic</span>}<span className="block text-xs italic text-muted-foreground">{s.sci} · {s.family}</span></TableCell>
-                  <TableCell className="whitespace-nowrap">{packs.find((p) => p.id === s.pack)?.emoji} {packs.find((p) => p.id === s.pack)?.name}</TableCell>
+                  <TableCell><PackLabel id={s.pack} /></TableCell>
                   <TableCell><IucnBadge code={s.iucn} /></TableCell>
                   <TableCell><VenomBadge s={s} />{s.venom === "non" && s.toxic === "non" && <span className="text-xs text-muted-foreground">Harmless</span>}</TableCell>
                   <TableCell className="text-right font-mono text-sm">{s.regions?.length || 0}</TableCell>
@@ -101,7 +101,7 @@ function SpeciesForm({ initial, onClose }: { initial: Species; onClose: () => vo
           <F id="sf-common" label="Common name *"><Input id="sf-common" value={s.common} onChange={(e) => set("common", e.target.value)} /></F>
           <F id="sf-sci" label="Scientific name *"><Input id="sf-sci" className="italic" value={s.sci} onChange={(e) => set("sci", e.target.value)} /></F>
           <F id="sf-family" label="Family"><Input id="sf-family" value={s.family} onChange={(e) => set("family", e.target.value)} /></F>
-          <F id="sf-pack" label="Group (pack)"><NativeSelect id="sf-pack" value={s.pack} onChange={(e) => set("pack", e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}</NativeSelect></F>
+          <F id="sf-pack" label="Group (pack)"><NativeSelect id="sf-pack" value={s.pack} onChange={(e) => set("pack", e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect></F>
           <F id="sf-iucn" label="IUCN status"><NativeSelect id="sf-iucn" value={s.iucn} onChange={(e) => set("iucn", e.target.value as Species["iucn"])}>{Object.entries(hw.IUCN).map(([k, v]) => <option key={k} value={k}>{k} · {v.name}</option>)}</NativeSelect></F>
           <F id="sf-venom" label="Venom"><NativeSelect id="sf-venom" value={s.venom} onChange={(e) => set("venom", e.target.value as Species["venom"])}>{Object.entries(hw.VENOM).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</NativeSelect></F>
           <F id="sf-toxic" label="Poisonous?"><NativeSelect id="sf-toxic" value={s.toxic} onChange={(e) => set("toxic", e.target.value as Species["toxic"])}><option value="non">Non-poisonous</option><option value="poisonous">Poisonous (skin / secretions)</option></NativeSelect></F>

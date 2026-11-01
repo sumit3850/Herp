@@ -8,7 +8,7 @@
   --shadow:0 1px 2px rgba(20,40,28,.05),0 8px 24px -12px rgba(20,40,28,.18);
   --r:14px;--r-sm:10px;
   --font:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  --mono:'Geist Mono',ui-monospace,monospace;--display:'Calistoga',Georgia,serif;
+  --mono:'Geist Mono',ui-monospace,monospace;--display:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -23,7 +23,7 @@
 html{-webkit-text-size-adjust:100%}
 body{font-family:var(--font);background:var(--paper);color:var(--ink);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
 h1,h2,h3,h4{line-height:1.2;font-weight:650}
-.display{font-family:var(--display);font-weight:400;letter-spacing:-.01em}
+.display{font-family:var(--display);font-weight:650;letter-spacing:-.025em}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 a{color:var(--forest-2)}
 button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
@@ -69,3 +69,19 @@ table.t td{padding:8px 10px;border-bottom:1px solid var(--line-soft);vertical-al
 .sil{width:100%;height:100%;display:grid;place-items:center;background:var(--forest-soft)}
 .sil svg{width:70%;height:70%}
 .hidden{display:none!important}
+
+/* ── icons (Lucide via assets/icons.js) ── */
+.ic{width:1.15em;height:1.15em;flex-shrink:0;vertical-align:-.2em}
+.pill .ic{width:12px;height:12px;vertical-align:-1px}
+.btn .ic{width:17px;height:17px}
+/* group dot: identity colour of a pack instead of emoji */
+.gdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--pc,#888);flex-shrink:0;vertical-align:1px}
+.chip .gdot{margin-right:6px}
+/* specimen-label monogram used until a species has a licensed photo */
+.mono-thumb{width:100%;height:100%;display:flex;flex-direction:column;justify-content:space-between;padding:7px 8px;background:color-mix(in srgb,var(--pc,#2f7d4f) 9%,var(--surface));border-left:3px solid var(--pc,#2f7d4f);color:var(--ink)}
+.mono-thumb b{font-size:21px;font-weight:600;letter-spacing:-.03em;font-style:italic;line-height:1;font-family:var(--font)}
+.mono-thumb small{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mono-hero{height:200px;border-radius:12px;border-left-width:4px;padding:18px 20px}
+.mono-hero b{font-size:56px}.mono-hero small{font-size:12px}
+a.btn{text-decoration:none}
+a.btn-primary{color:#fff}

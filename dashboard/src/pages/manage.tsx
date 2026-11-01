@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { EmptyState, MapView, PageHeader, RegionSelect, SearchInput, SpeciesName, StatCard, type MapPoint } from "@/components/common";
+import { EmptyState, MapView, PackDot, PackLabel, PageHeader, RegionSelect, SearchInput, SpeciesName, StatCard, type MapPoint } from "@/components/common";
 import { useAction, useData } from "@/lib/store";
 import { fmtDate, fmtDateTime, num } from "@/lib/format";
 import type { Entitlement, Price, Profile, Survey } from "@/lib/hw";
@@ -130,7 +130,7 @@ export function UsersPage() {
                   <div className="flex max-w-xs flex-wrap gap-1">
                     {u.packs.map((e) => (
                       <Badge key={e.id} variant="secondary" className="gap-1 font-normal">
-                        {packs.find((p) => p.id === e.pack)?.emoji} {e.region}
+                        <PackDot color={packs.find((p) => p.id === e.pack)?.color} /> {e.region}
                         <button aria-label="Revoke" className="hover:text-destructive" onClick={() => { if (confirm("Revoke this pack now?")) act(async () => { await hw.api.admin.revoke(e.id); await load(); }, "Revoked"); }}><X className="size-3" /></button>
                       </Badge>
                     ))}
@@ -159,7 +159,7 @@ function GrantDialog({ user, onClose, onDone }: { user: UserRow; onClose: () => 
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Grant a pack to {user.full_name || user.username}</DialogTitle><DialogDescription>No payment is taken. Leave days empty for lifetime access.</DialogDescription></DialogHeader>
         <div className="grid gap-3">
-          <div className="grid gap-1.5"><Label htmlFor="g-pack">Pack</Label><NativeSelect id="g-pack" value={pack} onChange={(e) => setPack(e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}</NativeSelect></div>
+          <div className="grid gap-1.5"><Label htmlFor="g-pack">Pack</Label><NativeSelect id="g-pack" value={pack} onChange={(e) => setPack(e.target.value)}>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect></div>
           <div className="grid gap-1.5"><Label htmlFor="g-reg">Region</Label><RegionSelect id="g-reg" value={region} onChange={setRegion} /></div>
           <div className="grid gap-1.5"><Label htmlFor="g-days">Days</Label><Input id="g-days" type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} /></div>
         </div>
@@ -187,7 +187,7 @@ export function PacksPage() {
           return (
             <Card key={p.id} className="overflow-hidden">
               <div className="h-1.5" style={{ background: p.color }} />
-              <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><span className="text-2xl">{p.emoji}</span>{p.name}</CardTitle><CardDescription>{p.blurb}</CardDescription></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><PackDot color={p.color} className="size-2.5" />{p.name}</CardTitle><CardDescription>{p.blurb}</CardDescription></CardHeader>
               <CardContent className="font-mono text-sm">{st ? `${hw.util.rupees(st.paise)} / state` : "—"} · {all ? `${hw.util.rupees(all.paise)} / India` : "—"}</CardContent>
             </Card>
           );
@@ -199,7 +199,7 @@ export function PacksPage() {
           <TableBody>
             {[...prices].sort((a, b) => a.pack.localeCompare(b.pack) || a.region.localeCompare(b.region)).map((p) => (
               <TableRow key={p.id}>
-                <TableCell>{packs.find((x) => x.id === p.pack)?.emoji} {packs.find((x) => x.id === p.pack)?.name}</TableCell>
+                <TableCell><PackLabel id={p.pack} /></TableCell>
                 <TableCell>{p.region === "*state" ? <i>Any single state (default)</i> : regionName(p.region)}</TableCell>
                 <TableCell className="text-right font-mono">{hw.util.rupees(p.paise)}</TableCell>
                 <TableCell className="text-right">{p.days} days</TableCell>
@@ -252,7 +252,7 @@ export function MapPage() {
       <PageHeader title="Map" description="Exact locations of every record. Only admins and reviewers can see this map; the public website blurs locations." />
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center gap-3 p-4">
-          <NativeSelect value={pack} onChange={(e) => setPack(e.target.value)} className="w-52" aria-label="Group"><option value="">All groups</option>{packs.map((p) => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}</NativeSelect>
+          <NativeSelect value={pack} onChange={(e) => setPack(e.target.value)} className="w-52" aria-label="Group"><option value="">All groups</option>{packs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect>
           <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)} className="w-44" aria-label="Review status"><option value="">Any review status</option><option value="pending">Pending</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option></NativeSelect>
           {(["sightings", "roadkill", "tracks"] as const).map((k) => (
             <label key={k} className="flex items-center gap-2 text-sm capitalize"><input type="checkbox" className="custom-checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {k === "roadkill" ? "Road-kill" : k}</label>

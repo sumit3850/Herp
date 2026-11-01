@@ -93,6 +93,7 @@ body.authing main{max-width:none;padding:0}
 .glass.pw{position:relative}.glass.pw input{padding-right:48px}
 .eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);opacity:.6;padding:6px;color:var(--ink-soft)}.eye .ic{width:19px;height:19px}
 .linkbtn{color:var(--forest-2);font-size:13.5px;font-weight:600}
+.auth-note{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--forest-soft);font-size:13.5px}
 .btn.big{min-height:52px;border-radius:16px;font-size:15px}
 .orline{position:relative;text-align:center;margin:10px 0 2px;font-size:13px;color:var(--ink-soft)}
 .orline::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px solid var(--line)}
@@ -151,6 +152,7 @@ body.authing main{max-width:none;padding:0}
           <h1 class="auth-title ae d1" id="auth-title"><span class="thin">Welcome to</span> <b id="auth-name">HerpWatch</b></h1>
           <p class="muted ae d2" id="tagline"></p>
           <div class="tabs2 ae d3" role="tablist"><button id="t-in" class="on" role="tab">Sign in</button><button id="t-up" role="tab">Create account</button></div>
+          <div id="auth-note" class="auth-note hidden" role="status"></div>
           <form id="f-in">
             <div class="ae d3"><label class="f" for="in-email">Email or username</label><div class="glass"><input id="in-email" autocomplete="username" placeholder="Enter your email or username" required></div></div>
             <div class="ae d4"><label class="f" for="in-pw">Password</label><div class="glass pw"><input id="in-pw" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="eye" data-eye="in-pw" aria-label="Show password" data-ic="eye"></button></div></div>
@@ -168,7 +170,7 @@ body.authing main{max-width:none;padding:0}
           </form>
           <div class="orline ae d7"><span>Or continue with</span></div>
           <button type="button" class="btn btn-ghost btn-block big ae d8" id="g-in"><svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>Continue with Google</button>
-          <p class="tiny muted ae d9" style="text-align:center;margin-top:14px">Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
+          <p class="tiny muted ae d9" style="text-align:center;margin-top:14px">One account for the app and the dashboard. Recording sightings is free. Packs unlock photos, ID notes and the Identify helper.</p>
         </div>
       </div>
       <div class="auth-hero" aria-hidden="true">
@@ -232,7 +234,7 @@ const esc = U.esc;
 // ───────────────────────── state ─────────────────────────
 const S = {
   me: null, packs: [], regions: [], prices: [], index: [], unlocked: {}, ents: [],
-  region: U.lsGet('hw_region', HW.C.DEFAULT_REGION || 'IN'), checklist: [], pack: 'all', filters: new Set(), q: '',
+  region: U.lsGet('hw_region', HW.C.DEFAULT_REGION || 'IN'), checklist: [], clStatus: {}, pack: 'all', filters: new Set(), q: '',
   view: 'guide',
 };
 const byId = (id) => S.index.find((s) => s.id === id);
@@ -258,7 +260,9 @@ function pills(s) {
   let h = `<span class="pill iucn" style="background:${iu.color}" title="${esc(iu.name)}">IUCN ${esc(s.iucn)}</span>`;
   if (s.pack === 'snakes' || s.venom !== 'non') h += `<span class="pill ${s.venom === 'venomous' ? 'venom' : s.venom === 'mild' ? 'mild' : 'safe'}">${I(VICON[s.venom])} ${VENOM[s.venom].short}</span>`;
   if (s.toxic === 'poisonous') h += `<span class="pill poison">${I('skull')} Poisonous</span>`;
-  if (s.endemic) h += `<span class="pill end">Endemic</span>`;
+  const cst = S.clStatus?.[s.id];
+  if (s.endemic || cst === 'endemic') h += `<span class="pill end">Endemic</span>`;
+  if (cst && !['native', 'endemic'].includes(cst)) h += `<span class="pill lock" title="Status on the ${esc(regionName(S.region))} checklist">${esc(cst[0].toUpperCase() + cst.slice(1))}</span>`;
   if (!isUnlocked(s.id)) h += `<span class="pill lock">${I('lock')} ${esc(packOf(s.pack).name)}</span>`;
   return h;
 }
@@ -290,11 +294,44 @@ async function loadUser() {
     U.lsSet('hw_unlocked_' + S.me.id, S.unlocked); U.lsSet('hw_ents_' + S.me.id, S.ents);
   } catch (e) { console.warn(e); }
 }
-async function loadChecklist() {
-  const key = 'hw_cl_' + S.region;
-  S.checklist = U.lsGet(key, null) || S.index.filter((s) => (s.regions || []).includes(S.region)).map((s) => s.id);
-  try { S.checklist = await api.checklist(S.region); U.lsSet(key, S.checklist); } catch {}
+async function loadChecklist(region = S.region) {
+  const key = 'hw_cl_' + region, skey = 'hw_cls_' + region;
+  if (region === S.region) {
+    S.checklist = U.lsGet(key, null) || S.index.filter((s) => (s.regions || []).includes(region)).map((s) => s.id);
+    S.clStatus = U.lsGet(skey, {});
+  }
+  try {
+    const rows = await api.checklistEntries(region);
+    const ids = rows.map((r) => r.species_id), st = Object.fromEntries(rows.map((r) => [r.species_id, r.status]));
+    U.lsSet(key, ids); U.lsSet(skey, st);
+    if (region === S.region) { S.checklist = ids; S.clStatus = st; }
+  } catch {}
 }
+
+// ── live updates: admin edits in the dashboard reach the app without a reload ──
+let liveTimer = null, liveOff = null;
+async function refreshLive() {
+  if (!S.me || !navigator.onLine) return;
+  const before = JSON.stringify([S.checklist, S.clStatus, S.index.length, S.prices]);
+  await loadCatalog();
+  await loadChecklist();
+  const t = TRIP(), r = RK();
+  for (const reg of new Set([t?.region_code, r?.region_code].filter((x) => x && x !== S.region))) await loadChecklist(reg);
+  await loadUser();
+  if (JSON.stringify([S.checklist, S.clStatus, S.index.length, S.prices]) === before) return;
+  // re-render only screens that have no unsaved typing
+  if (S.view === 'guide') renderGuide();
+  else if (S.view === 'identify') renderIdentify();
+  toast(`Checklist for ${regionName(S.region)} updated`);
+}
+const scheduleLive = () => { clearTimeout(liveTimer); liveTimer = setTimeout(refreshLive, 800); };
+function startLive() {
+  liveOff?.();
+  liveOff = api.onCatalogChange?.(() => scheduleLive());
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleLive(); });
+addEventListener('focus', scheduleLive);
+setInterval(() => { if (document.visibilityState === 'visible') refreshLive(); }, 3 * 60 * 1000);
 function fillRegionSelect(sel, value, { countryOnly = false } = {}) {
   const countries = S.regions.filter((r) => !r.parent), opts = [];
   for (const c of countries) {
@@ -839,12 +876,26 @@ async function renderMe() {
 // ═════════════════════════ AUTH ═════════════════════════
 $('t-in').onclick = () => { $('t-in').classList.add('on'); $('t-up').classList.remove('on'); $('f-in').classList.remove('hidden'); $('f-up').classList.add('hidden'); };
 $('t-up').onclick = () => { $('t-up').classList.add('on'); $('t-in').classList.remove('on'); $('f-up').classList.remove('hidden'); $('f-in').classList.add('hidden'); };
-$('f-in').onsubmit = async (e) => { e.preventDefault(); try { S.me = await api.signIn($('in-email').value.trim(), $('in-pw').value); await afterLogin(); } catch (er) { toast(er.message, 4000); } };
+function authNote(html) { const n = $('auth-note'); n.innerHTML = html; n.classList.toggle('hidden', !html); }
+function offerResend(email) {
+  authNote(`${I('mail')}<span>Didn’t get the e-mail? <button type="button" class="linkbtn" id="resend">Send it again</button></span>`);
+  $('resend').onclick = async () => { try { await api.resendConfirmation(email); toast('Confirmation e-mail sent to ' + email, 4000); } catch (er) { toast(er.message, 4000); } };
+}
+function showSignIn(email) { $('t-in').click(); if (email) $('in-email').value = email; $('in-pw').focus(); }
+$('f-in').onsubmit = async (e) => {
+  e.preventDefault(); authNote('');
+  const email = $('in-email').value.trim();
+  try { S.me = await api.signIn(email, $('in-pw').value); await afterLogin(); }
+  catch (er) { toast(er.message, 5000); if (er.code === 'email_not_confirmed') offerResend(email); }
+};
 $('f-up').onsubmit = async (e) => {
   e.preventDefault();
-  try { S.me = await api.signUp({ full_name: $('up-name').value.trim(), username: $('up-user').value.trim().toLowerCase(), phone: $('up-phone').value.trim(), email: $('up-email').value.trim(), home_region: $('up-region').value, password: $('up-pw').value });
-    if (!S.me) return toast('Check your email to confirm the account, then sign in.', 5000);
-    await afterLogin(); } catch (er) { toast(er.message, 4000); }
+  authNote('');
+  const email = $('up-email').value.trim();
+  try { S.me = await api.signUp({ full_name: $('up-name').value.trim(), username: $('up-user').value.trim().toLowerCase(), phone: $('up-phone').value.trim(), email, home_region: $('up-region').value, password: $('up-pw').value });
+    if (!S.me) { showSignIn(email); toast(`Almost done: confirm the e-mail we sent to ${email}, then sign in here or in the dashboard.`, 7000); return offerResend(email); }
+    await afterLogin(); }
+  catch (er) { toast(er.message, 6000); if (er.code === 'already_registered') showSignIn(email); }
 };
 $('g-in').onclick = async () => { try { await api.signInWithGoogle(location.href.split('#')[0]); } catch (er) { toast(er.message, 4000); } };
 document.querySelectorAll('[data-eye]').forEach((b) => (b.onclick = () => { const i = $(b.dataset.eye); i.type = i.type === 'password' ? 'text' : 'password'; b.style.opacity = i.type === 'text' ? 1 : .6; }));
@@ -852,7 +903,7 @@ $('forgot').onclick = async () => { const em = $('in-email').value.trim(); if (!
 async function afterLogin() {
   if (S.me?.home_region && !localStorage.getItem('hw_region')) { S.region = S.me.home_region; U.lsSet('hw_region', S.region); }
   fillRegionSelect($('region'), S.region);
-  await loadUser(); await loadChecklist(); syncNow(); show('guide');
+  await loadUser(); await loadChecklist(); syncNow(); startLive(); show('guide');
 }
 function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.documentElement.setAttribute('data-theme', t) : document.documentElement.removeAttribute('data-theme'); }
 
@@ -861,6 +912,7 @@ function applyTheme() { const t = U.lsGet('hw_theme', ''); t ? document.document
   applyTheme();
   $('brand').textContent = HW.C.APP_NAME; document.title = HW.C.APP_NAME + ' Field App'; $('tagline').textContent = HW.C.TAGLINE;
   $('auth-app').textContent = $('auth-name').textContent = HW.C.APP_NAME;
+  if (!HW.DEMO) { $('in-email').type = 'email'; $('in-email').autocomplete = 'email'; $('in-email').placeholder = 'Enter your e-mail address'; document.querySelector('label[for=in-email]').textContent = 'E-mail'; }
   document.querySelectorAll('[data-ic]').forEach((el) => (el.innerHTML = I(el.dataset.ic)));
   document.querySelectorAll('.iconbtn[data-install]').forEach((el) => (el.innerHTML = I('download')));
   if (HW.DEMO) { $('demo').classList.remove('hidden'); document.body.style.setProperty('--topoff', $('demo').offsetHeight + 'px'); }

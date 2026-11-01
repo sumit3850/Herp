@@ -75,23 +75,7 @@ language sql security definer stable set search_path = public as $$
   select exists(select 1 from public.profiles where id = auth.uid() and status = 'approved');
 $$;
 
--- profile row is created server-side from sign-up metadata
-create or replace function public.handle_new_user() returns trigger
-language plpgsql security definer set search_path = public as $$
-declare md jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); reg text;
-begin
-  reg := nullif(md->>'home_region','');
-  if reg is not null and not exists (select 1 from public.regions where code = reg) then reg := null; end if;
-  insert into public.profiles (id, email, username, full_name, phone, home_region)
-  values (new.id, coalesce(new.email, ''),
-          coalesce(nullif(lower(md->>'username'),''), split_part(new.email,'@',1) || '-' || substr(md5(new.id::text),1,4)),
-          coalesce(md->>'full_name',''), coalesce(md->>'phone',''), reg)
-  on conflict (id) do nothing;
-  return new;
-end $$;
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created after insert on auth.users
-  for each row execute function public.handle_new_user();
+-- profile creation on sign-up, self-repair and backfill live in supabase/accounts-live.sql
 
 -- users may edit their own name/phone/region but never role/status
 create or replace function public.guard_profile() returns trigger

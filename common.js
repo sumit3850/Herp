@@ -64,6 +64,8 @@
     }
     return best;
   }
+  // Errors with a machine-readable code so the UI can offer the right next step
+  const codedError = (code, message) => Object.assign(new Error(message), { code });
   // Public maps never show exact points: ~1 km normally, ~10 km for sensitive species
   const coarsen = (v, sensitive) => Math.round(v * (sensitive ? 10 : 100)) / (sensitive ? 10 : 100);
 
@@ -192,11 +194,22 @@
     },
     async signUp(f) {
       const db = demoDb();
-      if (db.users.some((u) => u.email.toLowerCase() === f.email.toLowerCase())) throw new Error('Email already registered');
+      if (db.users.some((u) => u.email.toLowerCase() === f.email.toLowerCase())) throw codedError('already_registered', `${f.email} already has an account (one account works for the app and the dashboard). Sign in instead.`);
       const u = { id: uid(), email: f.email, password: f.password, username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region, role: 'user', status: 'approved' };
       db.users.push(u); db.session = u.id; saveDemo(db); return u;
     },
     async resetPassword() { throw new Error('Password reset needs the Supabase back-end (demo mode).'); },
+    async resendConfirmation() {},
+    async checklistEntries(region) {
+      const db = demoDb(); const st = (db.clStatus || {})[region] || {}; const sp = Object.fromEntries(db.species.map((s) => [s.id, s]));
+      return (db.checklists[region] || []).map((id) => ({ species_id: id, status: st[id] || (sp[id]?.endemic && region !== 'IN' ? 'endemic' : 'native') }));
+    },
+    /** Demo mode: the dashboard and app share localStorage, so edits in one tab reach the other. */
+    onCatalogChange(cb) {
+      const on = (e) => { if (e.key === DKEY) cb('demo', e); };
+      addEventListener('storage', on);
+      return () => removeEventListener('storage', on);
+    },
     async signOut() { const db = demoDb(); db.session = null; saveDemo(db); },
     async signInWithGoogle() { throw new Error('Google sign-in needs the Supabase back-end (you are in demo mode).'); },
     async updateProfile(p) { const db = demoDb(); const me = demoMe(db); Object.assign(me, p); saveDemo(db); return me; },
@@ -337,21 +350,49 @@
   async function loadProfile() {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return (_profile = null);
-    const p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle());
-    return (_profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, role: 'user', status: 'approved' });
+    let p = ok(await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle());
+    // one account for app + dashboard: if the profile row is missing (e.g. the user signed up
+    // before the database was set up), the server creates it from the sign-up details
+    if (!p) { const { data } = await sb.rpc('ensure_profile'); p = data && data.id ? data : null; }
+    return (_profile = p ? { ...p, email: session.user.email } : { id: session.user.id, email: session.user.email, username: (session.user.email || '').split('@')[0], role: 'user', status: 'approved' });
   }
   const sbApi = {
     mode: 'supabase',
     session: loadProfile,
     async signIn(email, password) {
-      ok(await sb.auth.signInWithPassword({ email, password }));
+      if (!email.includes('@')) throw codedError('use_email', 'Sign in with your e-mail address (the same one for the app and the dashboard).');
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) {
+        if (/not confirmed/i.test(error.message)) throw codedError('email_not_confirmed', `Please confirm your e-mail first: open the link we sent to ${email}.`);
+        if (/invalid login credentials/i.test(error.message)) throw codedError('bad_credentials', 'Wrong e-mail or password. The same account works in the app and the dashboard; use "Reset password" if you forgot it.');
+        throw new Error(error.message);
+      }
       const p = await loadProfile();
       if (p?.status === 'blocked') { await sb.auth.signOut(); throw new Error('This account is blocked. Contact the administrator.'); }
       return p;
     },
     async signUp(f) {
-      ok(await sb.auth.signUp({ email: f.email, password: f.password, options: { data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region } } }));
-      return loadProfile();
+      const { data, error } = await sb.auth.signUp({ email: f.email, password: f.password,
+        options: { emailRedirectTo: location.href.split('#')[0], data: { username: f.username, full_name: f.full_name, phone: f.phone || '', home_region: f.home_region } } });
+      if (error) {
+        if (/already registered|already exists/i.test(error.message)) throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
+        throw new Error(error.message);
+      }
+      // Supabase hides existing e-mails by returning a user with no identities
+      if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0)
+        throw codedError('already_registered', `${f.email} already has a ${C.APP_NAME} account (one account works for the app and the dashboard). Sign in instead.`);
+      return loadProfile();   // null when e-mail confirmation is required
+    },
+    async resendConfirmation(email) { ok(await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: location.href.split('#')[0] } })); },
+    async checklistEntries(region) { return ok(await sb.from('checklist').select('species_id,status').eq('region_code', region)); },
+    /** Live catalogue updates (admin edits a checklist / species / price) via Supabase Realtime. */
+    onCatalogChange(cb) {
+      const ch = sb.channel('hw-catalog')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'checklist' }, (e) => cb('checklist', e))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'species' }, (e) => cb('species', e))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_prices' }, (e) => cb('prices', e))
+        .subscribe();
+      return () => sb.removeChannel(ch);
     },
     async resetPassword(email) { ok(await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] })); },
     async signOut() { await sb.auth.signOut(); _profile = null; },

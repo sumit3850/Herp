@@ -28,6 +28,18 @@ jobs:
           done
           got=$(curl -s "${H[@]}" "$URL/rest/v1/species?select=id" ); row "Paid species notes hidden from visitors (RLS)" "$got" "[]"; [ "$got" = "[]" ] || fail=1
           st=$(curl -s -X POST "${H[@]}" -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/public_stats"); echo "$st" | grep -q '"totals"' && row "public_stats() for website report" "ok" "ok" || { row "public_stats()" "$(echo "$st" | head -c 120)" "ok"; fail=1; }
+          bs=$(curl -s -X POST "${H[@]}" -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/backend_status")
+          if echo "$bs" | grep -q auth_users; then
+            j() { echo "$bs" | python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
+            row "Accounts (auth / profiles)" "$(j "['auth_users']") / $(j "['profiles']")" "equal"
+            m=$(j "['users_without_profile']"); row "Accounts missing a profile" "$m" "0"; [ "$m" = 0 ] || fail=1
+            a=$(j "['admins']"); row "Admins" "$a" "≥ 1"; [ "$a" -ge 1 ] || echo "::warning title=No admin yet::Run: update public.profiles set role='admin' where email='you@…';"
+            row "Unconfirmed e-mails" "$(j "['unconfirmed_emails']")" "info"
+            row "Live-update tables (realtime)" "$(j "['realtime_tables']")" "checklist, pack_prices, species"
+          else
+            row "Accounts + live updates (accounts-live.sql)" "not installed" "installed"; fail=1
+            echo "::error title=Run accounts-live.sql::Paste supabase/accounts-live.sql into Supabase → SQL Editor and Run."
+          fi
           b=$(curl -s "${H[@]}" "$URL/storage/v1/bucket/photos" -o /dev/null -w '%{http_code}'); row "Photo storage bucket" "HTTP $b" "200/400 (exists)"
           for f in create-order razorpay-webhook; do c=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "${URL/.supabase.co/.functions.supabase.co}/$f"); row "Edge function $f" "HTTP $c" "deployed if not 404 (optional)"; done
           exit $fail

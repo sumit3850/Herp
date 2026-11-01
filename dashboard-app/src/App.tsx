@@ -120,7 +120,7 @@ function NoAccess({ me, onSignOut }: { me: Profile; onSignOut: () => void }) {
       <div className="max-w-md space-y-4 text-center">
         <ShieldAlert className="mx-auto size-10 text-warning" />
         <h1 className="text-2xl font-semibold">No dashboard access</h1>
-        <p className="text-muted-foreground">@{me.username} is a field account. Ask an administrator to make you a reviewer or admin, or continue in the field app.</p>
+        <p className="text-muted-foreground">You’re signed in as <b>{me.email || "@" + me.username}</b>. This is the same account you use in the field app, but it has the <b>{me.role}</b> role. The dashboard is for reviewers and admins. Ask an admin to change your role, or in Supabase run <code className="rounded bg-muted px-1">update profiles set role='admin' where email='{me.email}';</code></p>
         <div className="flex justify-center gap-2"><Button asChild><a href="../app.html">Open field app</a></Button><Button variant="outline" onClick={onSignOut}>Sign out</Button></div>
       </div>
     </div>

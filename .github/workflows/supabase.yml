@@ -53,6 +53,8 @@ jobs:
         run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/schema.sql
       - name: Load catalogue (regions, packs, prices, species, checklists)
         run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/seed.sql
+      - name: Accounts (one login for app + dashboard) and realtime
+        run: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/accounts-live.sql
       - name: Promote admin
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.admin_email != '' }}
         env:

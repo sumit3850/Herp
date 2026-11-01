@@ -48,6 +48,9 @@ export interface HWApi {
   signUp(f: { email: string; password: string; username: string; full_name: string; phone?: string; home_region: string }): Promise<Profile | null>;
   signInWithGoogle(redirectTo?: string): Promise<void>;
   resetPassword(email: string): Promise<void>;
+  resendConfirmation(email: string): Promise<void>;
+  checklistEntries(region: string): Promise<ChecklistEntry[]>;
+  onCatalogChange?(cb: (what: string) => void): () => void;
   signOut(): Promise<void>;
   packs(): Promise<Pack[]>;
   regions(): Promise<Region[]>;

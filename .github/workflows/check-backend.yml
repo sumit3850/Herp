@@ -1,0 +1,30 @@
+name: Check backend (read-only)
+
+# Talks to the Supabase project exactly like a signed-out visitor's browser does
+# (public publishable key only, no secrets) and reports whether the back end is ready.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe Supabase
+        run: |
+          URL=$(grep -oP "SUPABASE_URL:\s*'\K[^']+" config.js)
+          KEY=$(grep -oP "SUPABASE_ANON_KEY:\s*'\K[^']+" config.js)
+          H=(-H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+          fail=0
+          row() { echo "| $1 | $2 | $3 |" >> "$GITHUB_STEP_SUMMARY"; echo "$1 → $2 ($3)"; }
+          count() { curl -s -o /dev/null -D - "${H[@]}" -H "Prefer: count=exact" -H "Range: 0-0" "$URL/rest/v1/$1" | tr -d '\r' | awk -F/ '/^content-range/ {print $2}'; }
+          echo "| Check | Result | Expected |" >> "$GITHUB_STEP_SUMMARY"; echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          s=$(curl -s -o /dev/null -w '%{http_code}' "${H[@]}" "$URL/auth/v1/health"); row "Auth service" "HTTP $s" "200"; [ "$s" = 200 ] || fail=1
+          for t in "species_index?select=id:32" "regions?select=code:41" "packs?select=id:4" "pack_prices?select=id:8" "checklist?select=species_id:596"; do
+            path=${t%:*}; want=${t##*:}; got=$(count "$path"); row "${path%%\?*}" "${got:-error}" "$want"; [ -n "$got" ] && [ "$got" -ge "$want" ] 2>/dev/null || fail=1
+          done
+          got=$(curl -s "${H[@]}" "$URL/rest/v1/species?select=id" ); row "Paid species notes hidden from visitors (RLS)" "$got" "[]"; [ "$got" = "[]" ] || fail=1
+          st=$(curl -s -X POST "${H[@]}" -H "Content-Type: application/json" -d '{}' "$URL/rest/v1/rpc/public_stats"); echo "$st" | grep -q '"totals"' && row "public_stats() for website report" "ok" "ok" || { row "public_stats()" "$(echo "$st" | head -c 120)" "ok"; fail=1; }
+          b=$(curl -s "${H[@]}" "$URL/storage/v1/bucket/photos" -o /dev/null -w '%{http_code}'); row "Photo storage bucket" "HTTP $b" "200/400 (exists)"
+          for f in create-order razorpay-webhook; do c=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "${URL/.supabase.co/.functions.supabase.co}/$f"); row "Edge function $f" "HTTP $c" "deployed if not 404 (optional)"; done
+          exit $fail

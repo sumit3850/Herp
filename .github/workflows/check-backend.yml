@@ -40,6 +40,17 @@ jobs:
             row "Accounts + live updates (accounts-live.sql)" "not installed" "installed"; fail=1
             echo "::error title=Run accounts-live.sql::Paste supabase/accounts-live.sql into Supabase → SQL Editor and Run."
           fi
+          # ── sign-in / sign-up diagnostics (no account is created, no e-mail is sent) ──
+          st=$(curl -s "${H[@]}" "$URL/auth/v1/settings"); echo "AUTH SETTINGS: $st"
+          j2() { echo "$st" | python3 -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
+          row "E-mail sign-in enabled" "$(j2 "d.get('external',{}).get('email')")" "True"
+          row "Sign-ups allowed" "$(j2 "not d.get('disable_signup')")" "True"
+          row "E-mail confirmation required" "$(j2 "not d.get('mailer_autoconfirm')")" "info"
+          row "Google sign-in enabled" "$(j2 "d.get('external',{}).get('google')")" "optional"
+          code=$(curl -s -o /tmp/tok.json -w '%{http_code}' -X POST "${H[@]}" -H "Content-Type: application/json" -d '{"email":"nobody@example.invalid","password":"wrong-password-123"}' "$URL/auth/v1/token?grant_type=password")
+          row "Password sign-in endpoint answers (bad login on purpose)" "HTTP $code $(head -c 120 /tmp/tok.json)" "400 invalid_credentials"
+          code=$(curl -s -o /tmp/su.json -w '%{http_code}' -X POST "${H[@]}" -H "Content-Type: application/json" -d '{"email":"not-an-email","password":"x"}' "$URL/auth/v1/signup")
+          row "Sign-up endpoint answers (invalid e-mail on purpose)" "HTTP $code $(head -c 120 /tmp/su.json)" "400/422 validation error"
           b=$(curl -s "${H[@]}" "$URL/storage/v1/bucket/photos" -o /dev/null -w '%{http_code}'); row "Photo storage bucket" "HTTP $b" "200/400 (exists)"
           for f in create-order razorpay-webhook; do c=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "${URL/.supabase.co/.functions.supabase.co}/$f"); row "Edge function $f" "HTTP $c" "deployed if not 404 (optional)"; done
           exit $fail

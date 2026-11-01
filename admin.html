@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HerpWatch Admin</title>
+<meta name="theme-color" content="#1f5b3c">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Calistoga&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<style>
+.app{display:flex;min-height:100dvh}
+.side{width:230px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100dvh;overflow-y:auto}
+.side .brand{font-family:var(--display);font-size:22px;padding:0 10px 4px;color:var(--forest-2)}
+.side .sub{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);padding:0 10px 14px;font-weight:600}
+.nav button{display:flex;gap:10px;align-items:center;width:100%;padding:9px 12px;border-radius:10px;font-size:14px;font-weight:550;color:var(--ink-soft);text-align:left}
+.nav button:hover{background:var(--surface-2);color:var(--ink)}
+.nav button.on{background:var(--forest-soft);color:var(--forest-2)}
+.main{flex:1;min-width:0;padding:22px 26px}
+.top{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.top h1{font-size:22px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.kpi{padding:14px}.kpi b{display:block;font-family:var(--mono);font-size:24px}.kpi span{font-size:12px;color:var(--ink-soft)}
+.tablewrap{overflow:auto;max-height:68vh}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-start;justify-content:center;z-index:100;overflow-y:auto;padding:30px 12px}
+.modal.on{display:flex}
+.modal .card{width:min(760px,100%);padding:20px}
+.cl-list{columns:2;column-gap:20px}
+.cl-list label{display:flex;gap:8px;align-items:center;padding:4px 0;break-inside:avoid;font-size:14px}
+.cl-list input{width:18px;min-height:18px;height:18px;accent-color:var(--forest-2)}
+#amap{height:520px;border-radius:12px}
+.login{max-width:380px;margin:12vh auto}
+@media (max-width:820px){.app{flex-direction:column}.side{width:100%;height:auto;position:static;display:flex;flex-direction:column}.nav{display:flex;overflow-x:auto;gap:4px}.nav button{white-space:nowrap;width:auto}.main{padding:16px}.cl-list{columns:1}}
+</style>
+</head>
+<body>
+<div id="demo" class="demo-banner hidden">Demo mode — sign in as <b>admin@demo / admin</b>. Changes stay in this browser.</div>
+<div id="login" class="login card pad hidden">
+  <h1 class="display" style="font-size:26px">Admin console</h1>
+  <p class="small muted" style="margin-bottom:10px">Sign in with an administrator account.</p>
+  <form id="lf"><label class="f">Email</label><input id="le" required><label class="f">Password</label><input id="lp" type="password" required>
+  <button class="btn btn-primary btn-block" style="margin-top:14px">Sign in</button></form>
+</div>
+
+<div class="app hidden" id="app">
+  <aside class="side">
+    <div class="brand" id="brand">HerpWatch</div><div class="sub">Admin console</div>
+    <nav class="nav" id="nav">
+      <button data-v="overview" class="on">📊 Overview</button>
+      <button data-v="species">🦎 Species</button>
+      <button data-v="checklists">✅ Checklists</button>
+      <button data-v="pricing">💳 Packs & pricing</button>
+      <button data-v="users">👥 Users</button>
+      <button data-v="sightings">📝 Sightings</button>
+      <button data-v="roadkill">🛣️ Road-kill</button>
+      <button data-v="map">🗺️ Map</button>
+    </nav>
+    <div style="margin-top:auto;padding:14px 10px" class="small"><a href="app.html">Field app</a> · <a href="index.html">Website</a> · <a href="#" id="logout">Sign out</a></div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div class="modal" id="modal"><div class="card" id="modalbody"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="config.js"></script>
+<script src="data/seed.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+const { api, IUCN, VENOM, util: U } = HW; const A = api.admin;
+const $ = (id) => document.getElementById(id), esc = U.esc;
+const S = { packs: [], regions: [], view: 'overview', spQ: '', spPack: '', sgFilter: 'pending', clRegion: HW.C.DEFAULT_REGION || 'IN' };
+const toast = (m) => { const t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800); };
+const modal = (html) => { $('modalbody').innerHTML = html; $('modal').classList.add('on'); };
+const closeModal = () => $('modal').classList.remove('on');
+$('modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
+const packName = (id) => S.packs.find((p) => p.id === id)?.name || id;
+const regionName = (c) => S.regions.find((r) => r.code === c)?.name || c;
+const regionOptions = (v, extra = []) => [...extra, ...S.regions.map((r) => [r.code, (r.parent ? '— ' : '') + r.name])].map(([c, n]) => `<option value="${c}" ${c === v ? 'selected' : ''}>${esc(n)}</option>`).join('');
+const packOptions = (v) => S.packs.map((p) => `<option value="${p.id}" ${p.id === v ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message); } };
+
+function show(v) {
+  S.view = v; document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+  $('main').innerHTML = '<p class="muted">Loading…</p>';
+  guard(VIEWS[v])();
+}
+$('nav').onclick = (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.v); };
+
+const VIEWS = {
+  // ───── overview ─────
+  async overview() {
+    const st = await api.publicStats(), t = st.totals;
+    const users = await A.users();
+    const pending = (await A.sightings()).filter((s) => s.review_status === 'pending').length;
+    $('main').innerHTML = `<div class="top"><h1>Overview</h1><span class="grow"></span><a class="btn btn-ghost btn-sm" href="index.html#report">Open public report</a></div>
+      <div class="kpis">${[[t.sightings, 'individuals recorded'], [t.species, 'species recorded'], [t.observers, 'contributors'], [users.length, 'registered users'], [pending, 'sightings awaiting review'], [t.roadkill, 'road-kills logged'], [t.roadkill_km, 'km road surveyed'], [t.roadkill_per_100km, 'road-kills / 100 km']]
+        .map(([n, l]) => `<div class="card kpi"><b>${n ?? 0}</b><span>${l}</span></div>`).join('')}</div>
+      <div class="grid2"><div class="card pad"><h3>Most recorded species</h3><table class="t" style="margin-top:8px">${st.top_species.map((s) => `<tr><td>${esc(s.common)} <i class="muted small">${esc(s.sci)}</i></td><td class="mono">${s.n}</td></tr>`).join('')}</table></div>
+      <div class="card pad"><h3>Most road-killed species</h3><table class="t" style="margin-top:8px">${st.roadkill_species.map((s) => `<tr><td>${esc(s.common)} <i class="muted small">${esc(s.sci)}</i></td><td class="mono">${s.n}</td></tr>`).join('') || '<tr><td class="muted">No data</td></tr>'}</table></div></div>`;
+  },
+
+  // ───── species CRUD ─────
+  async species() {
+    const all = await A.allSpecies();
+    const q = S.spQ.toLowerCase();
+    const list = all.filter((s) => (!S.spPack || s.pack === S.spPack) && (!q || (s.common + s.sci + s.family).toLowerCase().includes(q)));
+    $('main').innerHTML = `<div class="top"><h1>Species</h1><span class="muted small">${all.length} in catalogue</span><span class="grow"></span>
+        <button class="btn btn-ghost btn-sm" id="sp-exp">Export CSV</button><button class="btn btn-ghost btn-sm" id="sp-imp">Bulk import (JSON)</button><button class="btn btn-primary btn-sm" id="sp-add">+ Add species</button></div>
+      <div class="row" style="margin-bottom:10px"><input id="sp-q" placeholder="Search…" value="${esc(S.spQ)}" style="max-width:280px"><select id="sp-p" style="max-width:200px"><option value="">All packs</option>${packOptions(S.spPack)}</select></div>
+      <div class="card tablewrap"><table class="t"><thead><tr><th>Common (Scientific)</th><th>Pack</th><th>IUCN</th><th>Venom</th><th>Poison</th><th>Regions</th><th>Photos</th><th></th></tr></thead><tbody>
+      ${list.map((s) => `<tr><td><b>${esc(s.common)}</b><br><i class="small muted">${esc(s.sci)}</i></td><td>${esc(packName(s.pack))}</td>
+        <td><span class="pill iucn" style="background:${IUCN[s.iucn]?.color}">${s.iucn}</span></td><td>${esc(VENOM[s.venom]?.short)}</td><td>${s.toxic === 'poisonous' ? '☠' : ''}</td>
+        <td class="small">${(s.regions || []).length}</td><td class="small">${(s.images || []).length}</td>
+        <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-ed="${s.id}">Edit</button> <button class="btn btn-ghost btn-sm" data-del="${s.id}">Delete</button></td></tr>`).join('')}
+      </tbody></table></div>`;
+    $('sp-q').onchange = (e) => { S.spQ = e.target.value; show('species'); };
+    $('sp-p').onchange = (e) => { S.spPack = e.target.value; show('species'); };
+    $('sp-add').onclick = () => speciesForm(null);
+    $('sp-exp').onclick = () => U.download('species.csv', U.toCSV(all.map((s) => ({ ...s, regions: (s.regions || []).join(' '), images: (s.images || []).map((i) => (typeof i === 'string' ? i : i.url)).join(' ') }))));
+    $('sp-imp').onclick = importSpecies;
+    $('main').querySelectorAll('[data-ed]').forEach((b) => (b.onclick = () => speciesForm(all.find((s) => s.id === b.dataset.ed))));
+    $('main').querySelectorAll('[data-del]').forEach((b) => (b.onclick = guard(async () => {
+      if (!confirm('Delete this species? Existing sightings keep their record but lose the species link.')) return;
+      await A.deleteSpecies(b.dataset.del); toast('Deleted'); show('species');
+    })));
+  },
+
+  // ───── regional checklists ─────
+  async checklists() {
+    const all = await A.allSpecies(); const ids = new Set(await api.checklist(S.clRegion));
+    $('main').innerHTML = `<div class="top"><h1>Regional checklists</h1><span class="grow"></span></div>
+      <div class="card pad"><p class="small muted">The checklist controls which species appear in the app for a state / country, what users can tick when recording, and which state packs unlock which species.</p>
+      <div class="row wrap" style="margin:10px 0"><select id="cl-r" style="max-width:320px">${regionOptions(S.clRegion)}</select>
+        <button class="btn btn-ghost btn-sm" id="cl-all">Select all</button><button class="btn btn-ghost btn-sm" id="cl-none">Clear</button>
+        <button class="btn btn-ghost btn-sm" id="cl-paste">Paste scientific names…</button><span class="grow"></span><b id="cl-n"></b><button class="btn btn-primary" id="cl-save">Save checklist</button></div>
+      ${S.packs.map((p) => `<h3 style="margin:14px 0 6px">${p.emoji} ${esc(p.name)}</h3><div class="cl-list">${all.filter((s) => s.pack === p.id).sort((a, b) => a.common.localeCompare(b.common)).map((s) => `<label><input type="checkbox" value="${s.id}" ${ids.has(s.id) ? 'checked' : ''}>${esc(s.common)} <i class="muted small">${esc(s.sci)}</i></label>`).join('')}</div>`).join('')}</div>`;
+    const boxes = () => [...$('main').querySelectorAll('.cl-list input')];
+    const count = () => ($('cl-n').textContent = boxes().filter((b) => b.checked).length + ' species');
+    count(); $('main').onchange = (e) => { if (e.target.type === 'checkbox') count(); };
+    $('cl-r').onchange = (e) => { S.clRegion = e.target.value; show('checklists'); };
+    $('cl-all').onclick = () => { boxes().forEach((b) => (b.checked = true)); count(); };
+    $('cl-none').onclick = () => { boxes().forEach((b) => (b.checked = false)); count(); };
+    $('cl-paste').onclick = () => {
+      const txt = prompt('Paste scientific names (one per line). Matching species will be ticked.'); if (!txt) return;
+      const names = new Set(txt.split(/\n|,/).map((x) => x.trim().toLowerCase()).filter(Boolean)); let n = 0;
+      boxes().forEach((b) => { const s = all.find((x) => x.id === b.value); if (names.has(s.sci.toLowerCase())) { b.checked = true; n++; } });
+      count(); toast(`${n} of ${names.size} names matched`);
+    };
+    $('cl-save').onclick = guard(async () => { await A.setChecklist(S.clRegion, boxes().filter((b) => b.checked).map((b) => b.value)); toast('Checklist saved for ' + regionName(S.clRegion)); });
+  },
+
+  // ───── pricing ─────
+  async pricing() {
+    const prices = await api.prices();
+    $('main').innerHTML = `<div class="top"><h1>Packs & pricing</h1><span class="grow"></span><button class="btn btn-primary btn-sm" id="pr-add">+ Add price</button></div>
+      <div class="card pad"><p class="small muted">Users pay only for the packs they choose. Price lookup: an exact <b>pack + region</b> row wins; any single state falls back to the <b>*state</b> row. Prices are enforced server-side by the create-order function.</p></div>
+      <div class="card tablewrap" style="margin-top:10px"><table class="t"><thead><tr><th>Pack</th><th>Region</th><th>Price</th><th>Validity</th><th></th></tr></thead><tbody>
+      ${prices.sort((a, b) => a.pack.localeCompare(b.pack) || a.region.localeCompare(b.region)).map((p) => `<tr><td>${esc(packName(p.pack))}</td><td>${p.region === '*state' ? '<i>any single state</i>' : esc(regionName(p.region))}</td><td class="mono">${U.rupees(p.paise)}</td><td>${p.days} days</td>
+        <td><button class="btn btn-ghost btn-sm" data-ed="${p.id}">Edit</button> <button class="btn btn-ghost btn-sm" data-del="${p.id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+    const form = (p = { pack: S.packs[0].id, region: '*state', paise: 4900, days: 365 }) => {
+      modal(`<h2>${p.id ? 'Edit' : 'Add'} price</h2><div class="grid2"><div><label class="f">Pack</label><select id="pf-pack">${packOptions(p.pack)}</select></div>
+        <div><label class="f">Region</label><select id="pf-reg">${regionOptions(p.region, [['*state', 'Any single state (default)']])}</select></div>
+        <div><label class="f">Price (₹)</label><input id="pf-rs" type="number" min="1" value="${p.paise / 100}"></div><div><label class="f">Validity (days)</label><input id="pf-days" type="number" min="1" value="${p.days}"></div></div>
+        <div class="row" style="margin-top:14px"><span class="grow"></span><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="pf-save">Save</button></div>`);
+      $('pf-save').onclick = guard(async () => { await A.upsertPrice({ id: p.id, pack: $('pf-pack').value, region: $('pf-reg').value, paise: Math.round(+$('pf-rs').value * 100), days: +$('pf-days').value }); closeModal(); show('pricing'); });
+    };
+    $('pr-add').onclick = () => form();
+    $('main').querySelectorAll('[data-ed]').forEach((b) => (b.onclick = () => form(prices.find((p) => p.id === b.dataset.ed))));
+    $('main').querySelectorAll('[data-del]').forEach((b) => (b.onclick = guard(async () => { if (confirm('Delete this price?')) { await A.deletePrice(b.dataset.del); show('pricing'); } })));
+  },
+
+  // ───── users & entitlements ─────
+  async users() {
+    const users = await A.users();
+    $('main').innerHTML = `<div class="top"><h1>Users</h1><span class="muted small">${users.length}</span><span class="grow"></span><button class="btn btn-ghost btn-sm" id="u-exp">Export CSV</button></div>
+      <div class="card tablewrap"><table class="t"><thead><tr><th>User</th><th>Home</th><th>Role</th><th>Status</th><th>Active packs</th><th></th></tr></thead><tbody>
+      ${users.map((u) => `<tr><td><b>${esc(u.full_name || u.username)}</b><br><span class="small muted">@${esc(u.username)} ${esc(u.email || '')} ${esc(u.phone || '')}</span></td><td class="small">${esc(regionName(u.home_region || ''))}</td>
+        <td><select data-role="${u.id}" style="min-height:32px;padding:4px">${['user', 'reviewer', 'admin'].map((r) => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+        <td><select data-status="${u.id}" style="min-height:32px;padding:4px">${['approved', 'pending', 'blocked'].map((r) => `<option ${r === u.status ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+        <td class="small">${u.packs.map((e) => `<span class="pill lock" style="margin:1px">${esc(packName(e.pack))} · ${esc(e.region)} <a href="#" data-rev="${e.id}" title="Revoke">✕</a></span>`).join('') || '<span class="muted">—</span>'}</td>
+        <td><button class="btn btn-ghost btn-sm" data-grant="${u.id}">Grant pack</button></td></tr>`).join('')}</tbody></table></div>`;
+    $('u-exp').onclick = () => U.download('users.csv', U.toCSV(users.map(({ packs, ...u }) => ({ ...u, packs: packs.map((e) => e.pack + '@' + e.region).join(' ') }))));
+    $('main').querySelectorAll('[data-role]').forEach((s) => (s.onchange = guard(async () => { await A.setUser(s.dataset.role, { role: s.value }); toast('Role updated'); })));
+    $('main').querySelectorAll('[data-status]').forEach((s) => (s.onchange = guard(async () => { await A.setUser(s.dataset.status, { status: s.value }); toast('Status updated'); })));
+    $('main').querySelectorAll('[data-rev]').forEach((a) => (a.onclick = guard(async (e) => { e.preventDefault(); if (confirm('Revoke this pack now?')) { await A.revoke(a.dataset.rev); show('users'); } })));
+    $('main').querySelectorAll('[data-grant]').forEach((b) => (b.onclick = () => {
+      modal(`<h2>Grant a pack</h2><p class="small muted">For invoices, bank transfers, researchers, forest-department staff, etc.</p>
+        <div class="grid2"><div><label class="f">Pack</label><select id="g-pack">${packOptions()}</select></div><div><label class="f">Region</label><select id="g-reg">${regionOptions('IN')}</select></div>
+        <div><label class="f">Days (blank = lifetime)</label><input id="g-days" type="number" value="365"></div></div>
+        <div class="row" style="margin-top:14px"><span class="grow"></span><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="g-save">Grant</button></div>`);
+      $('g-save').onclick = guard(async () => { await A.grant(b.dataset.grant, $('g-pack').value, $('g-reg').value, +$('g-days').value || null); closeModal(); toast('Granted'); show('users'); });
+    }));
+  },
+
+  // ───── sightings review ─────
+  async sightings() {
+    const all = await A.sightings(), sp = Object.fromEntries((await api.speciesIndex()).map((s) => [s.id, s]));
+    const list = all.filter((s) => !S.sgFilter || s.review_status === S.sgFilter);
+    $('main').innerHTML = `<div class="top"><h1>Sightings</h1><span class="grow"></span>
+      <select id="sg-f" style="max-width:180px"><option value="">All (${all.length})</option>${['pending', 'accepted', 'rejected'].map((x) => `<option value="${x}" ${x === S.sgFilter ? 'selected' : ''}>${x} (${all.filter((s) => s.review_status === x).length})</option>`).join('')}</select>
+      <button class="btn btn-ghost btn-sm" id="sg-exp">Export CSV</button></div>
+      <div class="card tablewrap"><table class="t"><thead><tr><th>Date</th><th>Species</th><th>#</th><th>Region</th><th>Location</th><th>Observer</th><th>Photos / notes</th><th>Review</th></tr></thead><tbody>
+      ${list.slice(0, 1000).map((s) => `<tr><td class="small">${new Date(s.observed_at).toLocaleDateString()}</td><td>${esc(sp[s.species_id]?.common || s.species_text || '?')}<br><i class="small muted">${esc(sp[s.species_id]?.sci || '')}</i></td><td class="mono">${s.count}</td>
+        <td class="small">${esc(regionName(s.region_code))}</td><td class="small mono">${s.lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${s.lat},${s.lng}">${(+s.lat).toFixed(4)}, ${(+s.lng).toFixed(4)}</a>` : '—'}</td>
+        <td class="small">@${esc(s.username || '')}</td><td class="small">${(s.photos || []).map((p) => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="width:42px;height:42px;object-fit:cover;border-radius:6px"></a>`).join('')} ${esc(s.notes || '')}</td>
+        <td style="white-space:nowrap"><button class="btn btn-sm ${s.review_status === 'accepted' ? 'btn-primary' : 'btn-ghost'}" data-rv="${s.id}|accepted">✓</button> <button class="btn btn-sm ${s.review_status === 'rejected' ? 'btn-red' : 'btn-ghost'}" data-rv="${s.id}|rejected">✕</button> <button class="btn btn-ghost btn-sm" data-del="${s.id}" title="Delete">🗑</button></td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nothing here.</td></tr>'}</tbody></table></div>`;
+    $('sg-f').onchange = (e) => { S.sgFilter = e.target.value; show('sightings'); };
+    $('sg-exp').onclick = () => U.download('sightings.csv', U.toCSV(all.map(({ profiles, photos, ...s }) => ({ ...s, common_name: sp[s.species_id]?.common || s.species_text, scientific_name: sp[s.species_id]?.sci || '', photos: (photos || []).join(' ') }))));
+    $('main').querySelectorAll('[data-rv]').forEach((b) => (b.onclick = guard(async () => { const [id, st] = b.dataset.rv.split('|'); await A.review(id, st); show('sightings'); })));
+    $('main').querySelectorAll('[data-del]').forEach((b) => (b.onclick = guard(async () => { if (confirm('Delete this sighting permanently?')) { await A.deleteSighting(b.dataset.del); show('sightings'); } })));
+  },
+
+  // ───── road-kill data ─────
+  async roadkill() {
+    const { surveys, records } = await A.roadkill(), sp = Object.fromEntries((await api.speciesIndex()).map((s) => [s.id, s]));
+    $('main').innerHTML = `<div class="top"><h1>Road-kill data</h1><span class="grow"></span><button class="btn btn-ghost btn-sm" id="rk-csv">Records CSV</button><button class="btn btn-ghost btn-sm" id="rk-geo">GeoJSON (tracks + points)</button></div>
+      <div class="card tablewrap" style="max-height:34vh"><table class="t"><thead><tr><th>Survey</th><th>Observer</th><th>Mode</th><th>km</th><th>Records</th><th>/100 km</th><th></th></tr></thead><tbody>
+      ${surveys.map((s) => { const n = records.filter((r) => r.survey_id === s.id).reduce((a, r) => a + r.count, 0); return `<tr><td><b>${esc(s.road_name || '—')}</b> <span class="small muted">${esc(s.road_type || '')}</span><br><span class="small muted">${new Date(s.started_at).toLocaleString()} · ${esc(regionName(s.region_code))}</span></td>
+        <td class="small">@${esc(s.username || '')}</td><td>${esc(s.mode)}</td><td class="mono">${s.distance_km}</td><td class="mono">${n}</td><td class="mono">${s.distance_km > 0 ? ((n / s.distance_km) * 100).toFixed(1) : '—'}</td>
+        <td><button class="btn btn-ghost btn-sm" data-delsv="${s.id}">🗑</button></td></tr>`; }).join('') || '<tr><td colspan="7" class="muted">No surveys yet.</td></tr>'}</tbody></table></div>
+      <div class="card tablewrap" style="margin-top:12px"><table class="t"><thead><tr><th>Time</th><th>Species / group</th><th>#</th><th>Condition</th><th>Location</th><th>Photo</th><th></th></tr></thead><tbody>
+      ${records.map((r) => `<tr><td class="small">${new Date(r.observed_at).toLocaleString()}</td><td>${esc(sp[r.species_id]?.common || r.species_text || 'Unidentified')} <span class="small muted">(${esc(packName(r.pack || sp[r.species_id]?.pack))})</span></td><td class="mono">${r.count}</td><td class="small">${esc(r.condition)} ${esc(r.side || '')}</td>
+        <td class="small mono"><a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${r.lat},${r.lng}">${(+r.lat).toFixed(4)}, ${(+r.lng).toFixed(4)}</a></td><td>${(r.photos || []).map((p) => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="width:42px;height:42px;object-fit:cover;border-radius:6px"></a>`).join('')}</td>
+        <td><button class="btn btn-ghost btn-sm" data-delrk="${r.id}">🗑</button></td></tr>`).join('')}</tbody></table></div>`;
+    $('rk-csv').onclick = () => U.download('roadkill-records.csv', U.toCSV(records.map(({ profiles, photos, ...r }) => ({ ...r, common_name: sp[r.species_id]?.common || r.species_text, scientific_name: sp[r.species_id]?.sci || '', photos: (photos || []).join(' ') }))));
+    $('rk-geo').onclick = () => U.download('roadkill.geojson', JSON.stringify({ type: 'FeatureCollection', features: [
+      ...surveys.map((s) => ({ type: 'Feature', properties: { kind: 'survey', id: s.id, road: s.road_name, km: s.distance_km, observer: s.username, started: s.started_at }, geometry: { type: 'LineString', coordinates: (s.track || []).map(([a, b]) => [b, a]) } })),
+      ...records.map((r) => ({ type: 'Feature', properties: { kind: 'roadkill', survey: r.survey_id, species: sp[r.species_id]?.sci || r.species_text, group: r.pack, count: r.count, condition: r.condition, at: r.observed_at }, geometry: { type: 'Point', coordinates: [r.lng, r.lat] } }))] }), 'application/geo+json');
+    $('main').querySelectorAll('[data-delsv]').forEach((b) => (b.onclick = guard(async () => { if (confirm('Delete the survey AND all its records?')) { await A.deleteSurvey(b.dataset.delsv); show('roadkill'); } })));
+    $('main').querySelectorAll('[data-delrk]').forEach((b) => (b.onclick = guard(async () => { if (confirm('Delete this record?')) { await A.deleteRoadkill(b.dataset.delrk); show('roadkill'); } })));
+  },
+
+  // ───── map (exact locations — admins only) ─────
+  async map() {
+    const sg = await A.sightings(), { surveys, records } = await A.roadkill(), sp = Object.fromEntries((await api.speciesIndex()).map((s) => [s.id, s]));
+    $('main').innerHTML = `<div class="top"><h1>Map</h1><span class="small muted">Exact locations — visible to admins only. The public website shows blurred points.</span></div><div id="amap"></div>`;
+    const m = L.map('amap').setView([20, 80], 5);
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(m);
+    const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
+    const gS = L.layerGroup().addTo(m), gR = L.layerGroup().addTo(m), gT = L.layerGroup().addTo(m);
+    const col = (p) => S.packs.find((x) => x.id === p)?.color || '#555';
+    sg.filter((s) => s.lat != null).forEach((s) => L.circleMarker([s.lat, s.lng], { radius: 5, weight: 1, color: '#fff', fillColor: col(sp[s.species_id]?.pack), fillOpacity: .9 }).bindPopup(`${esc(sp[s.species_id]?.common || s.species_text)} ×${s.count}<br>${new Date(s.observed_at).toLocaleDateString()} · @${esc(s.username || '')}`).addTo(gS));
+    surveys.forEach((s) => L.polyline(s.track || [], { color: '#c53030', weight: 3, opacity: .6 }).bindPopup(esc(s.road_name)).addTo(gT));
+    records.forEach((r) => L.marker([r.lat, r.lng], { icon: L.divIcon({ html: '✕', className: '', iconSize: [14, 14], iconAnchor: [7, 7] }) }).bindPopup(`Road-kill: ${esc(sp[r.species_id]?.common || r.species_text || 'unidentified')}`).addTo(gR));
+    L.control.layers({ Map: osm, Satellite: sat }, { Sightings: gS, 'Road-kill points': gR, 'Survey tracks': gT }).addTo(m);
+  },
+};
+
+// ───── species form ─────
+function speciesForm(s) {
+  const n = s || { id: '', pack: S.packs[0].id, common: '', sci: '', family: '', venom: 'non', toxic: 'non', iucn: 'NE', endemic: false, sensitive: false, size: '', habitat: '', distribution: '', id_notes: '', behaviour: '', similar: '', images: [], traits: {}, regions: [] };
+  const imgs = (n.images || []).map((i) => (typeof i === 'string' ? i : [i.url, i.credit, i.license].filter(Boolean).join(' | '))).join('\n');
+  const ta = (id, label, v) => `<label class="f">${label}</label><textarea id="${id}">${esc(v || '')}</textarea>`;
+  modal(`<h2>${s ? 'Edit' : 'Add'} species</h2>
+    <div class="grid2"><div><label class="f">Common name *</label><input id="sf-common" value="${esc(n.common)}"></div><div><label class="f">Scientific name *</label><input id="sf-sci" value="${esc(n.sci)}"></div>
+    <div><label class="f">Family</label><input id="sf-family" value="${esc(n.family)}"></div><div><label class="f">Pack</label><select id="sf-pack">${packOptions(n.pack)}</select></div>
+    <div><label class="f">IUCN status</label><select id="sf-iucn">${Object.entries(IUCN).map(([k, v]) => `<option value="${k}" ${k === n.iucn ? 'selected' : ''}>${k} — ${v.name}</option>`).join('')}</select></div>
+    <div><label class="f">Venom</label><select id="sf-venom">${Object.entries(VENOM).map(([k, v]) => `<option value="${k}" ${k === n.venom ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+    <div><label class="f">Poisonous?</label><select id="sf-toxic"><option value="non">Non-poisonous</option><option value="poisonous" ${n.toxic === 'poisonous' ? 'selected' : ''}>Poisonous (skin / secretions)</option></select></div>
+    <div><label class="f">Size</label><input id="sf-size" value="${esc(n.size)}"></div></div>
+    <div class="row wrap" style="margin-top:10px"><label class="row small"><input type="checkbox" id="sf-end" style="width:18px;min-height:18px" ${n.endemic ? 'checked' : ''}> Endemic</label>
+    <label class="row small"><input type="checkbox" id="sf-sens" style="width:18px;min-height:18px" ${n.sensitive ? 'checked' : ''}> Sensitive (blur public locations to ~10 km)</label></div>
+    ${ta('sf-id', 'Identification notes', n.id_notes)}${ta('sf-hab', 'Habitat', n.habitat)}${ta('sf-dist', 'Distribution notes', n.distribution)}${ta('sf-beh', 'Behaviour / safety notes', n.behaviour)}${ta('sf-sim', 'Similar species', n.similar)}
+    <label class="f">Images — one per line: <span class="mono">url | credit | licence</span></label><textarea id="sf-img" placeholder="https://upload.wikimedia.org/... | © Photographer | CC BY-SA 4.0">${esc(imgs)}</textarea>
+    <div class="grid2"><div><label class="f">Identify: colours (comma separated)</label><input id="sf-col" value="${esc((n.traits?.color || []).join(', '))}"></div>
+    <div><label class="f">Identify: pattern</label><select id="sf-pat">${['', 'plain', 'banded', 'spotted', 'blotched', 'striped', 'zigzag', 'checkered', 'warty', 'star'].map((p) => `<option ${p === n.traits?.pattern ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
+    <div><label class="f">Identify: active</label><select id="sf-time">${['', 'day', 'dusk', 'night', 'any'].map((p) => `<option ${p === n.traits?.time ? 'selected' : ''}>${p}</option>`).join('')}</select></div></div>
+    <p class="tiny muted" style="margin-top:8px">Where it occurs is managed under <b>Checklists</b>.</p>
+    <div class="row" style="margin-top:14px"><span class="grow"></span><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="sf-save">Save</button></div>`);
+  $('sf-save').onclick = guard(async () => {
+    const sci = $('sf-sci').value.trim(), common = $('sf-common').value.trim();
+    if (!sci || !common) return toast('Common and scientific names are required');
+    const out = { ...n, id: n.id || sci.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, ''), common, sci, family: $('sf-family').value.trim(), pack: $('sf-pack').value,
+      iucn: $('sf-iucn').value, venom: $('sf-venom').value, toxic: $('sf-toxic').value, size: $('sf-size').value, endemic: $('sf-end').checked, sensitive: $('sf-sens').checked,
+      id_notes: $('sf-id').value, habitat: $('sf-hab').value, distribution: $('sf-dist').value, behaviour: $('sf-beh').value, similar: $('sf-sim').value,
+      images: $('sf-img').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [url, credit, license] = l.split('|').map((x) => x.trim()); return { url, credit: credit || '', license: license || '' }; }),
+      traits: { color: $('sf-col').value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), pattern: $('sf-pat').value, time: $('sf-time').value } };
+    await A.upsertSpecies(out); closeModal(); toast('Saved'); show('species');
+  });
+}
+function importSpecies() {
+  modal(`<h2>Bulk import species</h2><p class="small muted">Paste a JSON array of species objects (same fields as <span class="mono">data/seed.js</span>: pack, common, sci, family, venom, toxic, iucn, habitat, distribution, …). Existing ids are updated.</p>
+    <textarea id="imp" style="min-height:260px;font-family:var(--mono);font-size:12px" placeholder='[{"pack":"snakes","common":"…","sci":"…"}]'></textarea>
+    <div class="row" style="margin-top:14px"><span class="grow"></span><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="imp-go">Import</button></div>`);
+  $('imp-go').onclick = guard(async () => {
+    const arr = JSON.parse($('imp').value); let n = 0;
+    for (const s of arr) { if (!s.sci || !s.common || !s.pack) continue; await A.upsertSpecies({ venom: 'non', toxic: 'non', iucn: 'NE', images: [], traits: {}, regions: [], ...s, id: s.id || s.sci.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '') }); n++; }
+    closeModal(); toast(`Imported ${n} species`); show('species');
+  });
+}
+
+// ───── boot ─────
+$('lf').onsubmit = guard(async (e) => { e.preventDefault(); const me = await api.signIn($('le').value.trim(), $('lp').value); enter(me); });
+$('logout').onclick = async (e) => { e.preventDefault(); await api.signOut(); location.reload(); };
+async function enter(me) {
+  if (!me) { $('login').classList.remove('hidden'); $('app').classList.add('hidden'); return; }
+  if (me.role !== 'admin') { toast('This account is not an administrator'); await api.signOut(); $('login').classList.remove('hidden'); return; }
+  $('login').classList.add('hidden'); $('app').classList.remove('hidden');
+  [S.packs, S.regions] = await Promise.all([api.packs(), api.regions()]);
+  show('overview');
+}
+(async () => {
+  const th = U.lsGet('hw_theme', ''); if (th) document.documentElement.setAttribute('data-theme', th);
+  $('brand').textContent = HW.C.APP_NAME; if (HW.DEMO) $('demo').classList.remove('hidden');
+  enter(await api.session().catch(() => null));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "HerpWatch — reptiles & amphibians",
+  "short_name": "HerpWatch",
+  "start_url": "app.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f1ea",
+  "theme_color": "#1f5b3c",
+  "description": "Field guide, sightings checklist and road-kill logger for reptiles and amphibians.",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
